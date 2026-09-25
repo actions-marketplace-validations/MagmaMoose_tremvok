@@ -9,7 +9,8 @@
 #
 # The flow:
 #   pull_request           plan every affected stack, comment the result, publish the check
-#                          as `action_required` when there is anything to apply
+#                          as `action_required` when there is anything to apply. An approval
+#                          already standing on the pull request does NOT apply here: see below
 #   review (approved)      apply the pull request's merge result, then turn the check green
 #   push to the default    plan; and with `terragrunt-apply-on-merge` on, apply what was merged
 #   schedule               plan everything (drift), notify on changes or failures
@@ -18,6 +19,13 @@
 # authorisation, and a merge that never had one is *reported* rather than applied — an
 # unapproved merge is a branch-protection problem, and turning the default branch red does not
 # fix it while leaving the stacks unapplied and invisible would.
+#
+# Nor is applying a commit whose approval was given to a different one. An approval authorises
+# the commit it was given for, so the run applies on the EVENT that grants it and never on the
+# state it happens to observe. Approve commit A, push commit B, and a plain `pull_request` run
+# for B that read the standing approval would apply B unreviewed; that is only safe where
+# branch protection dismisses stale reviews on push, which this action can neither see nor
+# require. B is planned and reported instead, and re-approving is what applies it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/common.sh
@@ -27,6 +35,9 @@ ROOT_DIR="${ROOT_DIR:-terraform}"
 SCOPE="${SCOPE:-auto}"                 # auto | all | changed
 CHANGED_FILES="${CHANGED_FILES:-}"     # a file listing changed paths
 EVENT_NAME="${EVENT_NAME:-}"
+# The review's own state on a `pull_request_review` event, from the event payload. Empty on
+# every other event, and empty when the caller's action.yml predates this field.
+REVIEW_STATE="${REVIEW_STATE:-}"
 PR_NUMBER="${PR_NUMBER:-}"
 HEAD_SHA="${HEAD_SHA:-}"
 APPLY="${APPLY:-auto}"                 # auto | never | force
@@ -45,11 +56,18 @@ APPLY_OPERATORS="${APPLY_OPERATORS:-}"
 # different account (a deliberate blast-radius boundary, not an accident) cannot be planned
 # with one credential, and without this the choice is one job per credential class.
 STACK_ENV="${STACK_ENV:-}"
+# auto | warn | off. See terragrunt-credentials.sh. `auto` fails the run, and that is the
+# default because the failure it replaces costs a full plan cycle across every stack to say
+# less than this does in one line.
+TG_CREDENTIAL_PREFLIGHT="${TG_CREDENTIAL_PREFLIGHT:-auto}"
 CHECK_NAME="${CHECK_NAME:-Terragrunt apply}"
 RUN_URL="${RUN_URL:-}"
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-/tmp}/tremvok-terragrunt}"
 DRY_RUN="${DRY_RUN:-false}"
 MAX_COMMENT_EXCERPT="${MAX_COMMENT_EXCERPT:-6000}"
+# What the whole plan comment may use. GitHub refuses one over 65,536 characters; this leaves
+# room for notify-pr.sh's marker and counts characters, so the total stays inside GitHub's limit.
+COMMENT_BUDGET="${COMMENT_BUDGET:-60000}"
 # Overridable so the tests can put a recorder in front of it and assert it was never run;
 # production always uses the script next to this one. Same shape as VAULT_READ_BIN in
 # deploy-ansible.sh.
@@ -214,11 +232,81 @@ if (( ${#stacks[@]} == 0 )); then
   exit 0
 fi
 
+# ── does this runner hold the credentials the stacks' providers need ─────────────────────
+# Before the first plan, because the failure it catches is the one this action reports worst:
+# the state backend's credential is supplied per stack and the PROVIDERS' is not, so init
+# succeeds, the plan starts, and every stack in turn dies inside a provider with a message
+# naming a generated file and no credential. See terragrunt-credentials.sh for what it reads.
+#
+# Per stack and with that stack's own environment applied, the same way its plan is invoked:
+# a credential that arrives through `terragrunt-stack-env` is invisible to a check run
+# without it, and a false alarm is how a guard like this gets switched off.
+credential_report="${WORK_DIR}/credentials-missing.tsv"
+: >"$credential_report"
+
+case "$TG_CREDENTIAL_PREFLIGHT" in
+  auto | warn | off) ;;
+  *) tremvok::fail "terragrunt-credential-preflight must be auto, warn or off (got '${TG_CREDENTIAL_PREFLIGHT}')" ;;
+esac
+
+if [[ "$TG_CREDENTIAL_PREFLIGHT" == "off" ]]; then
+  tremvok::log "terragrunt-credential-preflight is off; not checking provider credentials"
+else
+  printf '::group::provider credential preflight\n'
+  for stack in "${stacks[@]}"; do
+    stack_env=()
+    while IFS= read -r assignment; do
+      [[ -n "$assignment" ]] && stack_env+=( "$assignment" )
+    done < <(stack_env_for "$stack")
+    # Not `|| true`: the report file is the result, and a non-zero exit here only means this
+    # stack contributed a row to it. Under errexit the call has to be in a condition.
+    if env ${stack_env[@]+"${stack_env[@]}"} \
+         ROOT_DIR="$ROOT_DIR" CREDENTIAL_REPORT="$credential_report" \
+         "${here}/terragrunt-credentials.sh" "$stack"; then :; fi
+  done
+  printf '::endgroup::\n'
+fi
+
+if [[ -s "$credential_report" ]]; then
+  # One row per (cloud, stack). The summary groups by cloud, because the fix is per cloud and
+  # a list of forty stacks missing the same credential is one problem printed forty times.
+  clouds="$(cut -f1 "$credential_report" | sort -u)"
+  affected="$(wc -l <"$credential_report" | tr -d ' ')"
+
+  tremvok::summary "## Terragrunt — a provider has no credential"
+  tremvok::summary ""
+  tremvok::summary "The state backend's credential is not the providers'. \`terragrunt-stack-env\` supplies the first; these stacks declare a provider whose own credential chain finds nothing on this runner."
+  tremvok::summary ""
+  while IFS= read -r cloud; do
+    [[ -n "$cloud" ]] || continue
+    remedy="$(awk -F'\t' -v c="$cloud" '$1 == c { print $4; exit }' "$credential_report")"
+    count="$(awk -F'\t' -v c="$cloud" '$1 == c { n++ } END { print n + 0 }' "$credential_report")"
+    tremvok::summary "### ${cloud} — ${count} stack(s)"
+    tremvok::summary ""
+    tremvok::summary "${remedy}"
+    tremvok::summary ""
+    awk -F'\t' -v c="$cloud" '$1 == c { printf "- `%s` (provider \"%s\")\n", $2, $3 }' "$credential_report" \
+      | while IFS= read -r row; do tremvok::summary "$row"; done
+    tremvok::summary ""
+  done <<<"$clouds"
+
+  if [[ "$TG_CREDENTIAL_PREFLIGHT" == "warn" ]]; then
+    tremvok::warn "${affected} stack(s) declare a provider with no credential on this runner. terragrunt-credential-preflight is 'warn', so the plan runs anyway and will fail inside the provider."
+  else
+    tremvok::fail "${affected} stack(s) declare a provider with no credential on this runner. Planning them would fail inside the provider with an error naming a generated file rather than the credential. Fix the credential, or set terragrunt-credential-preflight: warn to plan anyway."
+  fi
+fi
+
 # ── plan every stack, continuing past failures ───────────────────────────────────────────
 plan_failures=0
 plan_changes=0
 rows=""
 details=""
+# The stacks that get a plan excerpt in the comment, filled by the loop and rendered once the
+# loop knows how many there are. Parallel arrays: bash 3.2 has no associative ones.
+detail_stacks=()
+detail_statuses=()
+detail_files=()
 
 for stack in "${stacks[@]}"; do
   out="${WORK_DIR}/plan/$(sanitize "$stack")"
@@ -263,15 +351,48 @@ for stack in "${stacks[@]}"; do
   short="${stack#"${ROOT_DIR}"/}"
   rows+="| \`${short}\` | ${badge} | ${summary_line} |"$'\n'
 
-  if [[ -s "${out}/plan.txt" ]]; then
-    excerpt="$("${here}/terragrunt-run.sh" redact "${out}/plan.txt" | tail -c "$MAX_COMMENT_EXCERPT")"
-  else
-    excerpt='No plan output was produced; see the workflow run.'
+  # A stack with no changes is fully described by its table row; an excerpt would only spend the
+  # comment's size budget on "No changes." for every stack a module change reaches.
+  if [[ "$status" != "no-changes" ]]; then
+    detail_stacks+=("$short")
+    detail_statuses+=("$status")
+    detail_files+=("${out}/plan.txt")
   fi
-  # Single quotes here are the printf format string; %s args expand as positional parameters
-  # shellcheck disable=SC2016
-  details+="$(printf '<details><summary><code>%s</code> — %s</summary>\n\n```text\n%s\n```\n</details>' "$short" "$status" "$excerpt")"$'\n'
 done
+
+# Terminal colour codes render as `[90m` noise in a comment, and each one costs six bytes of
+# JSON escaping, so they come out before an excerpt is measured. Any CSI sequence, not just SGR.
+strip_ansi() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g"; }
+
+build_details() { # excerpt-bytes
+  local limit="$1" i excerpt out=""
+  for ((i = 0; i < ${#detail_stacks[@]}; i++)); do
+    if [[ -s "${detail_files[$i]}" ]]; then
+      excerpt="$("${here}/terragrunt-run.sh" redact "${detail_files[$i]}" | strip_ansi | tail -c "$limit")"
+    else
+      excerpt='No plan output was produced; see the workflow run.'
+    fi
+    # Single quotes here are the printf format string; %s args expand as positional parameters
+    # shellcheck disable=SC2016
+    out+="$(printf '<details><summary><code>%s</code> — %s</summary>\n\n```text\n%s\n```\n</details>' "${detail_stacks[$i]}" "${detail_statuses[$i]}" "$excerpt")"$'\n'
+  done
+  printf '%s' "$out"
+}
+
+# Share COMMENT_BUDGET between the excerpts, after the table and the apply section have taken
+# theirs, so a change that plans many stacks still posts a comment instead of one GitHub refuses.
+# Each excerpt is the TAIL of its plan, which is where the summary and the last resources are.
+# Below a useful size, excerpts are dropped for a pointer to the run rather than shrunk to noise.
+excerpt_budget=0
+if (( ${#detail_stacks[@]} > 0 )); then
+  excerpt_budget=$(( (COMMENT_BUDGET - ${#rows} - 3000) / ${#detail_stacks[@]} - 200 ))
+  if (( excerpt_budget > MAX_COMMENT_EXCERPT )); then excerpt_budget=$MAX_COMMENT_EXCERPT; fi
+  if (( excerpt_budget >= 400 )); then
+    details="$(build_details "$excerpt_budget")"
+  else
+    details="_Plan excerpts left out: ${#detail_stacks[@]} stacks with changes do not fit in one comment. The workflow run has every plan._"
+  fi
+fi
 
 tremvok::summary "## Terragrunt plan"
 tremvok::summary ""
@@ -350,6 +471,46 @@ if [[ -z "$PR_NUMBER" && "$EVENT_NAME" == "push" ]] && tremvok::is_true "$APPLY_
 fi
 gate_pr="${PR_NUMBER:-$merged_pr}"
 
+# ── which events authorise an apply ──────────────────────────────────────────────────────
+# The approval says the change may be applied; the event says an apply was asked for now. Only
+# two events ask:
+#
+#   pull_request_review   the approval itself, which is what re-approving after a push sends
+#   push                  the merged-push path, and only with terragrunt-apply-on-merge on:
+#                         that is the only way merged_pr is non-empty above
+#
+# Everything else plans and reports, however the reviews read. Without this a plain
+# `pull_request` run applies whatever the pull request already carried an approval for, so a
+# push after an approval applies a commit nobody reviewed.
+#
+# EVENT_NAME is the value action.yml already passes from `github.event_name`, the same one
+# resolve-mode.sh reads. Nothing here re-derives the event.
+apply_authorised=false
+review_state="$(printf '%s' "$REVIEW_STATE" | tr '[:upper:]' '[:lower:]')"
+event_action="$(printf '%s' "${EVENT_ACTION:-}" | tr '[:upper:]' '[:lower:]')"
+if [[ "$EVENT_NAME" == "pull_request_review" ]]; then
+  # The review's own state, so a COMMENTED or CHANGES_REQUESTED review on a pull request that
+  # still holds an older approval re-plans rather than applying: that event is somebody
+  # writing a comment, not somebody approving this commit. Empty means the payload field was
+  # not passed at all, which is evidence of nothing, so the approval list decides alone.
+  #
+  # The event ACTION matters as much as the state, and this is the sharper edge. A workflow
+  # that writes `on: pull_request_review:` with no `types:` filter subscribes to `edited` and
+  # `dismissed` as well as `submitted`. An approving review that is merely EDITED, months
+  # later, to fix a typo in its body, fires with action=edited and state=approved on whatever
+  # HEAD is now. Without this, that edit applies a commit nobody reviewed, which is the exact
+  # sequence the guard above exists to prevent.
+  #
+  # Empty means the field was not passed at all, which is evidence of nothing, so the approval
+  # list decides alone. Both fields are lenient when absent for the same reason.
+  if [[ -z "$event_action" || "$event_action" == "submitted" ]] \
+    && [[ -z "$review_state" || "$review_state" == "approved" ]]; then
+    apply_authorised=true
+  fi
+elif [[ -n "$merged_pr" ]]; then
+  apply_authorised=true
+fi
+
 # ── decide whether this run may apply ────────────────────────────────────────────────────
 approver_list=""
 approval_readable=true
@@ -370,6 +531,10 @@ approver_list="${approver_list% }"
 
 may_apply=false
 apply_reason=""
+# An approval is standing on the pull request, but this run is not the event that spends it.
+# Its own gate section and check-run title exist because "waiting for an independent approval"
+# would be false here: there is one, and what is missing is an apply for THIS commit.
+standing_approval=false
 # Set only on the merged path, and that asymmetry is deliberate. On a pull request the
 # action_required check already blocks the merge, so a red job on every API blip buys nothing;
 # on a push nothing blocks, so refusing has to be loud or it is silence.
@@ -394,13 +559,19 @@ case "$APPLY" in
     apply_reason="applied by hand by @${GITHUB_ACTOR:-unknown}"
     ;;
   auto|*)
-    if [[ -n "$approver_list" ]]; then
+    if [[ -n "$approver_list" && "$apply_authorised" == true ]]; then
       may_apply=true
       if [[ -n "$merged_pr" ]]; then
         apply_reason="approved by ${approver_list} on #${merged_pr}"
       else
         apply_reason="approved by ${approver_list}"
       fi
+    elif [[ -n "$approver_list" ]]; then
+      # Reachable only with PR_NUMBER set: an approval needs a pull request in scope, and the
+      # merged path is authorised by definition. So the check below lands on a head a merge is
+      # waiting on, which is what makes `action_required` the right conclusion for it.
+      standing_approval=true
+      apply_reason="approved by ${approver_list}, but no apply has run for this commit"
     elif [[ "$approval_readable" == false ]]; then
       apply_reason="the reviews of #${gate_pr} could not be read, so this run refuses to apply"
       # Guarded on plan_changes, and that guard is the whole point. Refusing to apply nothing
@@ -462,6 +633,11 @@ if [[ -n "$gate_pr" ]]; then
   elif [[ "$apply_refused" == true ]]; then
     # shellcheck disable=SC2016  # Markdown backticks in printf format; not shell expressions
     gate_section=$(printf '### Apply\n\n❌ **%s.**\n\nNothing was applied. Retry the run, or check the token still has `pull-requests: read`.\n' "$(capitalize "$apply_reason")")
+  elif [[ "$standing_approval" == true ]]; then
+    # Deliberately not the "waiting for an approval" wording below: an approval is standing,
+    # and saying it is not would send the reviewer to look for a review they already left.
+    # shellcheck disable=SC2016  # Markdown backticks in printf format; not shell expressions
+    gate_section=$(printf '### Apply\n\n✅ **Approved by %s, but no apply has run for this commit.**\n\nAn approval applies the commit it was given for, and this run is not that approval: it read one that was already standing. Dismiss the approval and re-approve to apply this commit now. `terragrunt-apply: force` applies it by hand instead, for an actor named in `terragrunt-apply-operators`.\n' "$approver_list")
   elif [[ -n "$merged_pr" ]]; then
     # shellcheck disable=SC2016  # Markdown backticks in printf format; not shell expressions
     gate_section=$(printf '### Apply\n\n⚠️ **%s, so the affected stacks were not applied.**\n\nThis is reported rather than failed: an unapproved merge is a branch-protection matter, not a broken build. The stacks stay unapplied until someone applies them, and the scheduled drift run keeps reporting them. Re-run with `terragrunt-apply: force` to apply them by hand.\n' "$(capitalize "$apply_reason")")
@@ -597,6 +773,13 @@ elif [[ "$apply_refused" == true ]]; then
   conclusion="failure"
   title="Could not check the approval"
   summary="The reviews of #${merged_pr} could not be read, so this run cannot tell whether the merge was approved. Nothing was applied."
+elif [[ "$standing_approval" == true ]]; then
+  # Blocking, like the arm below and for the same reason: the pending changes are not applied
+  # and the merge must wait for them. Only the title and the summary differ, because this
+  # commit is not waiting on an approval, it is waiting on an apply.
+  conclusion="action_required"
+  title="Approved, but not applied for this commit"
+  summary="${plan_changes} stack(s) have pending changes. #${gate_pr} carries an approval by ${approver_list}, but no apply has run for this commit: an approval applies the commit it was given for, and this run was not started by one. Dismiss the approval and re-approve to apply this commit now, or re-run with terragrunt-apply: force."
 elif [[ -n "$PR_NUMBER" ]]; then
   # Not a failure and not a success: there is real work outstanding and a human has to
   # authorise it. `action_required` is the only conclusion that says so and still blocks.

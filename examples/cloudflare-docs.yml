@@ -1,0 +1,75 @@
+# An MkDocs site published to Cloudflare Workers Static Assets, behind the docs router.
+#
+# The canonical address is `https://docs.magmamoose.com/<repo>/`. This Worker has no route
+# and no workers.dev URL of its own: the router Worker on that hostname reaches it over a
+# SERVICE BINDING. That is what keeps Cloudflare Access a gate on the person visiting rather
+# than something the router holds a token past — see the ADR in workers/docs-router/.
+#
+#   push to main        -> `wrangler deploy`, live at docs.<host>/<repo>/
+#   pull_request        -> the strict build runs and publishes NOTHING. `workers_dev = false`
+#                          means there is no disposable destination to serve a preview from,
+#                          so the build is the check.
+#   workflow_dispatch   -> a manual re-publish, pinned to the default branch
+#
+# ONE JOB, unlike the github-pages shape this replaces. That workflow needs a second job
+# because a composite action cannot declare `pages: write` or the `github-pages` environment.
+# Wrangler needs neither, so the action does the whole thing.
+#
+# Two secrets. Mint CLOUDFLARE_API_TOKEN from Cloudflare's "Edit Cloudflare Workers" template
+# — and if you set `cloudflare-docs-require-access: true`, ADD the `Access: Apps` READ
+# permission to it, which that template does not include. Both are fine as organisation
+# secrets, so there is nothing to add per repository.
+#
+# Before the first run: copy `workers/docs-site/wrangler.toml` to the root of your repository,
+# set `name` to `docs-<repo>`, and add a `[[services]]` block for it to the router's config.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'wrangler.toml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'wrangler.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The sticky comment reporting the build on a pull request.
+  pull-requests: write
+
+concurrency:
+  group: docs
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: MagmaMoose/tremvok@v2  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          target: cloudflare-docs
+          cloudflare-docs-host: docs.magmamoose.com
+          # `cloudflare-docs-path` defaults to the repository name, which is the segment the
+          # router dispatches on. Set it only if your site is mounted somewhere else.
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The docs corpus, and the capability declaration beside it. Both land in this
+          # bucket, written only by a deploy and only after the site itself published.
+          cloudflare-docs-index-bucket: magmamoose-docs-index
+          # `cloudflare-docs-capability-file` defaults to `capability.json` and needs no line
+          # here. Commit that file if this repository is a house TOOL: it is what
+          # `find_capability` on mcp.magmamoose.com answers from, and the only thing that lets
+          # the MCP say "no house tool does this" rather than "nothing was found". Absent is
+          # the normal case. Present and malformed FAILS the run, pull requests included.
+          # For a PRIVATE site, turn this on. The deploy then asks Cloudflare which Access
+          # applications exist and refuses to publish unless one actually covers
+          # docs.magmamoose.com/<repo>. "It is behind Access" is otherwise a belief that
+          # nothing checks and that an edited application domain falsifies silently.
+          cloudflare-docs-require-access: 'false'

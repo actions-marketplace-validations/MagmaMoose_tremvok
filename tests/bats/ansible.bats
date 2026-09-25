@@ -120,7 +120,7 @@ pem_fixture() {
 @test "the key never reaches the command line, where ps would show it" {
   SSH_PRIVATE_KEY="$(pem_fixture SECRETMATERIAL0000)" \
     run bash "${SCRIPTS}/deploy-ansible.sh"
-  ! grep -q 'SECRETMATERIAL0000' "$STUB_LOG"
+  refute grep -q 'SECRETMATERIAL0000' "$STUB_LOG"
 }
 
 @test "a Vault reference is resolved, masked and written like a literal key" {
@@ -155,7 +155,7 @@ STUBEOF
     SSH_PRIVATE_KEY_VAULT='secret/data/team/app#ssh_private_key' \
     run bash "${SCRIPTS}/deploy-ansible.sh"
   [ "$status" -ne 0 ]
-  ! grep -q 'ansible-playbook' "$STUB_LOG"
+  refute grep -q 'ansible-playbook' "$STUB_LOG"
 }
 
 @test "a literal and a Vault reference together is a mistake, not a preference" {
@@ -170,7 +170,7 @@ STUBEOF
   VAULT_PASSWORD=hunter2-hunter2 run bash "${SCRIPTS}/deploy-ansible.sh"
   [[ "$output" == *"::add-mask::hunter2-hunter2"* ]]
   grep -q -- '--vault-password-file' "$STUB_LOG"
-  ! grep -q 'hunter2-hunter2' "$STUB_LOG"
+  refute grep -q 'hunter2-hunter2' "$STUB_LOG"
 }
 
 @test "no known_hosts is a loud downgrade, not a quiet default" {
@@ -201,7 +201,7 @@ STUBEOF
 @test "a galaxy requirements file that is not there fails before the playbook runs" {
   GALAXY_REQUIREMENTS=missing.yml run bash "${SCRIPTS}/deploy-ansible.sh"
   [ "$status" -ne 0 ]
-  ! grep -q 'ansible-playbook' "$STUB_LOG"
+  refute grep -q 'ansible-playbook' "$STUB_LOG"
 }
 
 @test "a missing playbook fails before anything is installed" {
@@ -267,7 +267,7 @@ STUBEOF
   grep -q 'VAULT_ADDR=<unset>' "${STUB_LOG}.env"
   grep -q 'VAULT_TOKEN=<unset>' "${STUB_LOG}.env"
   grep -q 'VAULT_NAMESPACE=<unset>' "${STUB_LOG}.env"
-  ! grep -q 'hvs.tokenvalue' "${STUB_LOG}.env"
+  refute grep -q 'hvs.tokenvalue' "${STUB_LOG}.env"
 }
 
 @test "ansible-vault-passthrough hands the playbook the same Vault the action reads, so its secrets need no second copy that stops being rotated" {
@@ -327,5 +327,5 @@ STUBEOF
   grep -q 'SSH_PRIVATE_KEY_VAULT=<unset>' "${STUB_LOG}.env"
   grep -q 'VAULT_PASSWORD_VAULT=<unset>' "${STUB_LOG}.env"
   # And the value it resolved is gone from the playbook's environment as well.
-  ! grep -q 'resolved-secret-value' "${STUB_LOG}.env"
+  refute grep -q 'resolved-secret-value' "${STUB_LOG}.env"
 }

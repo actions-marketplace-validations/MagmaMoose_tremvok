@@ -1,35 +1,29 @@
+INHERIT: mkdocs.base.yml
+# The shared base is provisioned by Caldrith from MagmaMoose/admin, and it carries everything
+# that is a fleet fact rather than a tremvok one: site_url (docs.magmamoose.com/tremvok/,
+# ADR-0005), the theme and palette (the peridot accent arrives as the `docs_accent` template
+# var), the markdown extensions, the brand marks and the `extra.seo` block the page-SEO step
+# reads. This file keeps what is genuinely per-repo.
+#
+# #6 made this file inherit and #2's squash dropped the line again, which left the one repo
+# that ships the docs toolchain as the one docs site on none of the base: no brand, no
+# publisher in its structured data. No `theme:` or `markdown_extensions:` here, and that is
+# required rather than tidy: MkDocs REPLACES lists under INHERIT, so a local list would
+# silently discard every entry the base provides.
 site_name: Tremvok
 site_description: "One GitHub Action for the whole deploy side: GitHub Pages, Cloudflare Workers, S3/CloudFront, Lambda, Terragrunt and Ansible, verified after the fact."
-site_url: https://magmamoose.github.io/tremvok/
 repo_url: https://github.com/MagmaMoose/tremvok
 repo_name: MagmaMoose/tremvok
 edit_uri: edit/main/docs/
 
-theme:
-  name: material
-  # Peridot: the one common gem born in the mantle and carried to the surface by an eruption.
-  palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: light green
-      accent: light green
-      toggle: { icon: material/weather-night, name: Switch to dark mode }
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: light green
-      accent: light green
-      toggle: { icon: material/weather-sunny, name: Switch to light mode }
-  features:
-    - content.code.copy
-    - navigation.sections
-    - navigation.top
-
 nav:
   - Home: index.md
   - Setup: setup.md
+  - 'Azure: a Function or API Management?': azure-functions-or-api-management.md
+  - Agent readiness: agent-readiness.md
   - Reference:
       # action-reference.md is GENERATED from action.yml by scripts/gen_action_reference.py,
-      # including which target each input belongs to — read out of the same descriptions the
+      # including which target each input belongs to, read out of the same descriptions the
       # runtime validator's map is built from, so the page and the check cannot disagree.
       - Action: action-reference.md
       - Configuration: configuration.md
@@ -39,13 +33,10 @@ nav:
   - Migrating to v2: migration.md
   - Roadmap: roadmap.md
 
-markdown_extensions:
-  - admonition
-  - tables
-  - pymdownx.details
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-  - toc: { permalink: true }
+# The agent-readiness step (scripts/gen_docs_agents.py) names this MCP server in the site's
+# skill, beside llms.txt and the markdown twins. `extra` is a dict, so this merges with the base's
+# `extra.seo` rather than replacing it. The fleet's server is every site's, so the line belongs in
+# the shared base in MagmaMoose/admin; it is here until it is there.
+extra:
+  agents:
+    mcp: https://mcp.magmamoose.com/

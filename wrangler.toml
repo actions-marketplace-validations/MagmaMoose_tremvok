@@ -1,0 +1,21 @@
+# Tremvok's own documentation site, as a Worker with Static Assets.
+#
+# Copied from workers/docs-site/, which is the template every repository in the fleet uses.
+# Two things differ per repo — `name` and, if the site is not built to `site/`,
+# `[assets].directory` — and nothing else does.
+#
+# There is no route and no workers.dev URL here on purpose. This Worker is reachable ONLY
+# through the docs router's service binding on docs.magmamoose.com, which is what makes the
+# Access application on that hostname a gate on the user rather than something the router
+# holds a service token past. See workers/docs-router/ and ADR-0005.
+
+name = "docs-tremvok"
+main = "workers/docs-site/src/index.js"
+compatibility_date = "2026-09-15"
+
+workers_dev = false
+
+[assets]
+directory = "site"
+binding = "ASSETS"
+not_found_handling = "404-page"

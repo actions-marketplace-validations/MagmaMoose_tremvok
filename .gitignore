@@ -21,7 +21,12 @@ terraform/localstack/_validate_provider.tf
 
 # Docs
 site/
+# gen_docs_index.py's default output when --index-out is not passed
+.docs-index/
 
 # Agent scratch
 .claude/last_output.txt
 .claude/settings.local.json
+
+# Wrangler local dev state (`wrangler dev` writes it beside the config it ran)
+.wrangler/

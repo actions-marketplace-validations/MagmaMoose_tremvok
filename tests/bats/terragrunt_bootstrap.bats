@@ -106,13 +106,13 @@ write_sums() {
   : >"$STUB_LOG"
   INSTALL=auto run bash "${SCRIPTS}/terragrunt-bootstrap.sh"
   [ "$status" -eq 0 ]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "install: never installs nothing and does not fail" {
   INSTALL=never run bash "${SCRIPTS}/terragrunt-bootstrap.sh"
   [ "$status" -eq 0 ]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "an unknown install mode is refused rather than treated as auto" {

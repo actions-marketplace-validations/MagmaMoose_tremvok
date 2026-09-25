@@ -14,7 +14,8 @@ JOB_STATUS="${JOB_STATUS:-success}"
 
 deployed=false
 for value in "${DOCS_SITE_DIR:-}" "${S3_DEPLOYED:-}" "${LAMBDA_DEPLOYED:-}" \
-             "${TG_DEPLOYED:-}" "${ANSIBLE_DEPLOYED:-}" "${CF_DEPLOYED:-}"; do
+             "${TG_DEPLOYED:-}" "${ANSIBLE_DEPLOYED:-}" "${CF_DEPLOYED:-}" \
+             "${AZ_DEPLOYED:-}" "${APIM_DEPLOYED:-}"; do
   # The docs target reports a built site path rather than a boolean, because "the site
   # exists" is the only thing it can honestly claim: for github-pages the deploy belongs
   # to the calling workflow.

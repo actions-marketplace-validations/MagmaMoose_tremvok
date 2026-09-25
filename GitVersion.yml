@@ -1,0 +1,13 @@
+# Teach GitVersion to read Conventional Commits.
+#
+# Without this file GitVersion runs on its built-in defaults, which look for `+semver:`
+# tokens and know nothing about `feat!:` or a `BREAKING CHANGE:` footer. Every commit in
+# this repository is a conventional one, so every release came out a PATCH -- including
+# the two that removed inputs and deleted the reusable workflows. The release job then
+# force-moved the floating `v1` tag onto them, and nine repositories pinned to `@v1`
+# silently received a contract they never asked for.
+#
+# The bump messages below are additive: the stock `+semver:` escape hatch still works.
+major-version-bump-message: '(?:^|\n)[a-zA-Z]+(?:\([^)]*\))?!:|(?:^|\n)BREAKING[ -]CHANGE:|\+semver:\s?(breaking|major)'
+minor-version-bump-message: '(?:^|\n)feat(?:\([^)]*\))?:|\+semver:\s?(feature|minor)'
+patch-version-bump-message: '(?:^|\n)fix(?:\([^)]*\))?:|\+semver:\s?(fix|patch)'

@@ -112,7 +112,7 @@ resolve() { run bash -c "bash '${SCRIPTS}/resolve-merged-pr.sh' 2>/dev/null"; }
   SHA= GITHUB_SHA= run bash "${SCRIPTS}/resolve-merged-pr.sh"
   [ "$status" -eq 1 ]
   [[ "$output" == *"needs a commit sha"* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "an HTTP error is exit 1 and never exit 2, because without --fail curl hands the error body to jq and 'unreadable' silently becomes 'no merged pull request'" {

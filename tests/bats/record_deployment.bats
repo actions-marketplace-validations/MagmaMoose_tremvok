@@ -71,7 +71,7 @@ STUBEOF
 
 @test "the body carries no repository field, because the server takes it from the token" {
   run bash "${SCRIPTS}/record-deployment.sh"
-  ! grep -q '"repository"' "${WORK}/payload.json"
+  refute grep -q '"repository"' "${WORK}/payload.json"
 }
 
 @test "empty optional fields are omitted rather than sent as empty strings" {
@@ -80,7 +80,7 @@ STUBEOF
   URL= VERSION= run bash "${SCRIPTS}/record-deployment.sh"
   [ "$status" -eq 0 ]
   refute grep -q '"url"' "${WORK}/payload.json"
-  ! grep -q '"version"' "${WORK}/payload.json"
+  refute grep -q '"version"' "${WORK}/payload.json"
 }
 
 @test "verified is sent as a JSON boolean, not a string" {

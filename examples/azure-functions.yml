@@ -1,0 +1,67 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write        # sign in to Azure by OIDC; no publish profile is stored anywhere
+  pull-requests: write   # the sticky preview comment
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  deploy:
+    runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          # net9.0, pinned, and not a floating "latest". A Linux Consumption app on
+          # DOTNET-ISOLATED|10.0 never starts: the site and its SCM endpoint both return 503
+          # with no log output at all. 9.0 started first try with an identical package.
+          dotnet-version: '9.0.x'
+
+      - run: dotnet publish --configuration Release --framework net9.0 --output publish
+
+      # The CONTENTS of the publish directory, at the archive root, dotfiles included.
+      # `zip -r ../package.zip .` rather than `zip -r package.zip publish` (which nests
+      # everything one level down) or `zip -r ../package.zip *` (which skips dotfiles).
+      # Either mistake deploys cleanly and then serves nothing: the worker reads
+      # `functions.metadata` and loads its extensions from `.azurefunctions/`, and both have
+      # to be at the root. Tremvok refuses a package missing them rather than letting you
+      # find out from a 404.
+      - run: cd publish && zip -r -q ../package.zip .
+
+      # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+      - uses: MagmaMoose/tremvok@v2
+        with:
+          target: azure-functions-zip
+          artifact-path: package.zip
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          functions-app-name: ${{ vars.FUNCTIONS_APP_NAME }}
+          functions-resource-group: ${{ vars.FUNCTIONS_RESOURCE_GROUP }}
+          # What the app has to DO, on top of the app answering at all, which this target
+          # always checks. An unsigned request to a GitHub webhook receiver must be refused.
+          #
+          # POST, and that is load-bearing rather than tidy. The trigger binds POST and nothing
+          # else, so a GET reaches no function and Azure answers 404 — the same answer a package
+          # containing no functions gives, which would make this check unable to tell a working
+          # deploy from a broken one. `POST -> 401` proves the function is bound AND that its
+          # signature check runs.
+          verify-url: https://${{ vars.FUNCTIONS_APP_NAME }}.azurewebsites.net/api/webhook
+          verify-method: POST
+          verify-status: '401'
+          slack-webhook: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+        # On a pull request this validates the package and publishes nothing, because a
+        # Consumption plan has no deployment slots and there is therefore no destination that
+        # does not take production traffic. Set `functions-slot` on a Premium or Dedicated
+        # plan and a pull request publishes to that slot instead.

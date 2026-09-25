@@ -32,11 +32,14 @@ OUT = ROOT / "docs" / "action-reference.md"
 # by a whole branch, and `--check` reported the page as up to date the entire time.
 TARGET_SUMMARY = {
     "github-pages": "Build an MkDocs site strictly and publish it to GitHub Pages",
+    "cloudflare-docs": "Build an MkDocs site strictly and publish it to Workers Static Assets",
     "s3-cloudfront": "Sync a built static site to S3, invalidate CloudFront",
     "lambda-zip": "Publish a Lambda package to S3, update the function, move an alias",
     "terragrunt": "Discover, plan and (on an approval) apply Terragrunt stacks",
     "ansible": "Run a playbook over SSH, then prove it is idempotent",
     "cloudflare-workers": "Deploy a Worker and its static assets with Wrangler",
+    "azure-functions-zip": "Publish a zip to an Azure Function App, then wait for it to answer",
+    "azure-apim-policy": "Publish policy documents to an existing API Management API, all or nothing",
 }
 
 _missing = set(TARGETS) - set(TARGET_SUMMARY)
@@ -75,6 +78,20 @@ PERMISSIONS = {
     ],
     "cloudflare-workers": [
         ("contents: read", "checkout"),
+        ("pull-requests: write", "the sticky preview comment"),
+    ],
+    "cloudflare-docs": [
+        ("contents: read", "checkout"),
+        ("pull-requests: write", "the sticky preview comment"),
+    ],
+    "azure-functions-zip": [
+        ("contents: read", "checkout"),
+        ("id-token: write", "sign in to Azure by OIDC"),
+        ("pull-requests: write", "the sticky preview comment"),
+    ],
+    "azure-apim-policy": [
+        ("contents: read", "checkout"),
+        ("id-token: write", "sign in to Azure by OIDC"),
         ("pull-requests: write", "the sticky preview comment"),
     ],
 }

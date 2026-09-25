@@ -15,6 +15,18 @@ repo, it is wrong.
   Pages artifact for your deploy job, and verify the published URL answers. A pull request
   builds without staging, because one site with no preview destination is what `mode: preview`
   already means here.
+- **`target: cloudflare-docs`**: the same strict MkDocs build as `github-pages`, published to
+  Cloudflare Workers Static Assets instead. The site Worker has no route and no workers.dev
+  URL; a router Worker on `docs.magmamoose.com` reaches it over a service binding, so one
+  hostname serves every repository by path and Cloudflare Access gates the person visiting
+  rather than the router. `cloudflare-docs-require-access` refuses to publish a private site
+  that no Access application covers, and treats "could not tell" as a refusal. The same build
+  emits the **docs corpus** (`llms.txt`, `llms-full.txt` and a search index) and, with a
+  bucket named, publishes the index to R2 as `index/<repo>.json` after the site deploys, so a
+  fleet of docs sites is one corpus written at build time rather than crawled afterwards. A
+  repository that is a house tool ships a `capability.json` to `capability/<repo>.json` in the
+  same bucket, validated against the MCP's schema on every run: that is what lets an agent be
+  told "no house tool does this" rather than "nothing was found".
 - **`target: s3-cloudfront`**: sync a built static site with per-class cache headers,
   invalidate CloudFront, previews under their own key prefix. Refuses to sync an empty
   artifact directory.

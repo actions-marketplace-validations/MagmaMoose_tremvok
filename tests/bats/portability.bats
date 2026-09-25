@@ -55,5 +55,5 @@ line two'"
   [ "$status" -eq 0 ]
   grep -q 'line two' "$GITHUB_OUTPUT"
   # The heredoc form, not `plan=line one`.
-  ! grep -q '^plan=line one$' "$GITHUB_OUTPUT"
+  refute grep -q '^plan=line one$' "$GITHUB_OUTPUT"
 }

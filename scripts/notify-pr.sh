@@ -37,6 +37,15 @@ fi
 marker="<!-- tremvok:${COMMENT_KEY} -->"
 payload_body="${marker}"$'\n'"${BODY}"
 
+# GitHub refuses a comment over 65,536 characters with a 422. Callers keep inside that (the
+# terragrunt plan comment sizes its excerpts to fit); this is the backstop, so an oversized body
+# still posts, cut short and saying so, instead of the comment silently never updating.
+MAX_COMMENT_CHARS="${MAX_COMMENT_CHARS:-65000}"
+if (( ${#payload_body} > MAX_COMMENT_CHARS )); then
+  cut_note=$'\n\n_Cut short to fit GitHub\'s comment size limit; the workflow run has the full output._'
+  payload_body="${payload_body:0:$(( MAX_COMMENT_CHARS - ${#cut_note} ))}${cut_note}"
+fi
+
 api() {
   curl --silent --show-error --location --max-time 20 \
     --header "authorization: Bearer ${AUTH_TOKEN}" \
@@ -60,7 +69,12 @@ find_comment_id() {
   return 0
 }
 
-request_body="$(jq -n --arg body "$payload_body" '{body: $body}')"
+# The request reaches curl as a file and the body reaches jq on stdin, never as an argument. A
+# comment near GitHub's limit is past the kernel's 128 KiB cap on a single argument once it is
+# JSON-escaped, and that failure ("Argument list too long") surfaced only as "could not post".
+request_file="$(mktemp)"
+trap 'rm -f "$request_file"' EXIT
+printf '%s' "$payload_body" | jq -Rs '{body: .}' >"$request_file"
 
 if ! comment_id="$(find_comment_id)"; then
   tremvok::warn "could not read the pull-request comments; skipping the sticky comment."
@@ -68,14 +82,14 @@ if ! comment_id="$(find_comment_id)"; then
 fi
 
 if [[ -n "$comment_id" ]]; then
-  if api --request PATCH --data "$request_body" \
+  if api --fail --request PATCH --data-binary @"$request_file" \
       "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" >/dev/null; then
     tremvok::log "updated pull-request comment ${comment_id}"
   else
     tremvok::warn "could not update the pull-request comment; the deploy is unaffected."
   fi
 else
-  if api --request POST --data "$request_body" \
+  if api --fail --request POST --data-binary @"$request_file" \
       "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" >/dev/null; then
     tremvok::log "posted a new pull-request comment"
   else

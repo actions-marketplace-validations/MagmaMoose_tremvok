@@ -1,18 +1,30 @@
 {
   "name": "tremvok",
-  "description": "One composite GitHub action with six deployment targets (github-pages, cloudflare-workers, s3-cloudfront, lambda-zip, terragrunt, ansible), plus an optional FastAPI deployment-record service on Lambda.",
-  "generated": "2026-09-09",
-  "generated_for": "agents \u2014 read this before grepping the tree",
+  "description": "One composite GitHub action with nine deployment targets (github-pages, cloudflare-docs, cloudflare-workers, azure-functions-zip, azure-apim-policy, s3-cloudfront, lambda-zip, terragrunt, ansible), plus an optional FastAPI deployment-record service on Lambda.",
+  "generated": "2026-09-23",
+  "generated_for": "agents — read this before grepping the tree",
   "surfaces": {
     "action": {
       "entrypoint": "action.yml",
-      "note": "Glue only. One action, six targets selected by `target`; every decision lives in scripts/, which is bats-tested and bash 3.2-compatible. An input belonging to another target is a hard error, checked first, before the checkout.",
+      "note": "Glue only. One action, nine targets selected by `target`; every decision lives in scripts/, which is bats-tested and bash 3.2-compatible. An input belonging to another target is a hard error, checked first, before the checkout.",
       "scripts": {
+        "scripts/access-covers.sh": "target: cloudflare-docs. refuses to publish unless a Cloudflare Access application covers <host>/<path>; covered / not covered / could-not-tell are never collapsed",
         "scripts/approval-gate.sh": "independent approvers; exits non-zero rather than reporting 'nobody'",
         "scripts/assume-role.sh": "GitHub OIDC -> STS -> masked short-lived credentials",
+        "scripts/azure-login.sh": "GitHub OIDC -> Entra ID federated credential -> an az session; masked, no publish profile",
+        "scripts/gcp-login.sh": "GitHub OIDC -> Google STS -> federated credential; workload identity federation replaces service-account keys; masked, no key file on disk",
         "scripts/build-git-credentials.sh": "targets that build: private-git-host rewrites into GIT_CONFIG_COUNT/KEY_n/VALUE_n for this job only, never ~/.gitconfig; tokens masked on receipt, bad lines named by index and host",
         "scripts/collect-outcome.sh": "one status every sink shares; a plan-only run is a success, a skip is a skip",
         "scripts/deploy-ansible.sh": "pinned ansible over SSH; secrets to 0600 files under RUNNER_TEMP; second check-mode run proves idempotence",
+        "scripts/deploy-azure-apim-policy.sh": "target: azure-apim-policy. az rest PUT of each policy document into an API that already exists; reads every scope first and puts it back if any document is refused; refuses a document for a missing operation",
+        "scripts/deploy-azure-functions-zip.sh": "target: azure-functions-zip. config-zip, then poll the app until it answers; the az exit code is corroborated against WEBSITE_RUN_FROM_PACKAGE because it lies; refuses a package whose functions.metadata/.azurefunctions are not at the root",
+        "scripts/deploy-cloudflare-docs.sh": "target: cloudflare-docs. MkDocs site -> Workers Static Assets; no preview destination (workers_dev=false), refuses an empty site, and composes the URL from the router's host/path because Wrangler has none to print",
+        "scripts/gen_docs_index.py": "target: cloudflare-docs. the docs corpus from a built MkDocs site: index/<repo>.json, llms.txt, llms-full.txt; canonical URLs from the router address or site_url",
+        "scripts/gen_docs_seo.py": "targets: github-pages, cloudflare-docs. after the build, in place: a meta description per page from its first prose paragraph (unique, <=155), Open Graph/Twitter, one JSON-LD @graph (WebSite, TechArticle, BreadcrumbList), and a markdown twin at <page>/index.md; extra.seo from the resolved config (INHERIT applied); never replaces or doubles a tag or twin a page already has",
+        "scripts/gen_docs_agents.py": "targets: github-pages, cloudflare-docs. after the SEO and corpus steps, in place: an Agent Skills index (/.well-known/agent-skills/index.json, digest of the bytes written) with one SKILL.md naming only what the build wrote (llms.txt, twins), the WebMCP script in every page's head, and /auth.md only for a site at its host's root; extra.agents from the resolved config; whatever the site publishes of these is kept",
+        "scripts/docs_webmcp.js": "the WebMCP tools every docs site gets (search_docs, read_page, list_pages, open_page), copied in as assets/javascripts/webmcp.js: feature-detected, never defined, registered on load, confined to the site root it derives from its own URL",
+        "scripts/publish-docs-index.sh": "target: cloudflare-docs. uploads the corpus to R2 as index/<repo>.json with `--remote`; deploy mode only, after the site deployed; not failure-isolated",
+        "scripts/publish-capability.sh": "target: cloudflare-docs. validates capability.json against the MCP's capability schema on EVERY run and uploads it to R2 as capability/<repo>.json on a deploy; absent is fine, malformed fails the run; stamps commit/generated and republishes `private` from the repo's visibility",
         "scripts/deploy-cloudflare-workers.sh": "target: cloudflare-workers. wrangler deploy, or versions upload --preview-alias for a PR; the preview takes no production traffic",
         "scripts/deploy-lambda-zip.sh": "immutable S3 key, publish version, verify CodeSha256, move alias (deploy only)",
         "scripts/deploy-s3-cloudfront.sh": "static site to S3 + CloudFront invalidation; refuses an empty artifact dir",
@@ -24,18 +36,20 @@
         "scripts/notify-webhook.sh": "Slack + Teams cards, jq-built, failure-isolated",
         "scripts/pages-detect.sh": "target: github-pages. uv vs pip, and whether to stage a Pages artifact at all (a preview or dry run does not)",
         "scripts/preflight-urls.sh": "one bounded probe per URL before the first plan; only curl 000 fails, 401/403 pass",
-        "scripts/preflight.sh": "fork / no-credential -> honest skip with a reason; AWS targets only",
+        "scripts/preflight.sh": "fork / no-credential -> honest skip with a reason; the AWS targets and azure-functions-zip",
         "scripts/publish-check.sh": "the check run that makes apply-before-merge enforceable",
         "scripts/record-deployment.sh": "OIDC-authenticated POST to the Tremvok API, failure-isolated",
         "scripts/resolve-merged-pr.sh": "commit -> the merged pull request it came from; 0 found, 2 none, 1 unreadable, never collapsed",
         "scripts/resolve-mode.sh": "event -> deploy|preview|rollback, environment, preview alias",
         "scripts/terragrunt-bootstrap.sh": "pinned, checksum-verified tofu+terragrunt, cached per version pair; plugin cache",
         "scripts/terragrunt-changed-files.sh": "event -> changed files (API on a PR, git diff on a push), then execs deploy-terragrunt.sh",
+        "scripts/terragrunt-credentials.sh": "pre-run check that the runner holds every cloud credential a stack's providers need (AWS, Azure, GCP, state backend); reports which are missing before the first plan",
         "scripts/terragrunt-discover.sh": "changed files -> stacks; modules map to nothing on purpose",
         "scripts/terragrunt-pr-head.sh": "terragrunt-pull-request -> that pull request's head sha; refuses a fork; prints the sha and nothing else",
         "scripts/terragrunt-run.sh": "plan|apply|redact one stack; plan -out is SAVED and apply uses it, re-planning only when stale",
         "scripts/validate-inputs.sh": "inputs vs target; every violation named at once, before the checkout",
-        "scripts/verify-live.sh": "curl status + header with retries; catches uploaded-but-unbound"
+        "scripts/vault-read.sh": "read one secret from HashiCorp Vault by <path>#<field> reference; KV v1 and v2; token never in argv",
+        "scripts/verify-live.sh": "curl status + header with retries; `verify-method` overrides GET for POST-only endpoints; catches uploaded-but-unbound"
       }
     },
     "python_tooling": {
@@ -62,6 +76,11 @@
       "module": "terraform/modules/tremvok-api",
       "harness": "terraform/localstack",
       "commands": "make -C terraform dev | validate | serve"
+    },
+    "workers": {
+      "note": "Cloudflare Workers that serve the fleet's documentation. Source and config only — deploying them is a separate, human act. See .claude/decisions/0004.",
+      "workers/docs-router/": "docs.<host>: owns the hostname, dispatches /<repo> to that repo's Worker over a SERVICE BINDING (never an HTTP proxy); route table is derived from env, so wrangler.toml is the only list. src/root.js serves the host root (landing page, or a 302 to LANDING_REDIRECT when set; llms.txt, sitemap index, robots.txt, security.txt), src/discovery.js the AI/API catalogs, src/sites.js reads each site's title and summary from its own llms.txt (PRIVATE_SITES are never listed or read), src/headers.js is the one header policy for every response on the host. src/skills.js serves the host's Agent Skills index (its own skill, then each listed site's from that site's index), src/webmcp.js the landing page's WebMCP tools, kept a string because esbuild's keepNames breaks fn.toString()",
+      "workers/docs-site/": "the template every repo copies to its own root; assets plus a one-line main, because a service binding needs a fetch handler to dispatch to"
     }
   },
   "hotspots": [
@@ -83,16 +102,27 @@
     "scripts/build_api_zip.py: the one definition of what ships; determinism and --arch are both load-bearing"
   ],
   "tests": {
-    "tests/bats/": "343 cases over the shell scripts, with aws/curl/terragrunt/ansible-playbook stubbed",
+    "tests/bats/": "515 cases over the shell scripts, with aws/curl/terragrunt/ansible-playbook/wrangler stubbed",
     "tests/test_action_contract.py": "the action.yml <-> scripts <-> docs/action-reference.md contract: unread env vars (following the whole script chain), dead inputs, undocumented inputs, notification steps not gated on always()",
+    "tests/test_bats_negations.py": "no bats assertion may be a bare `!`-negation except on the last line of the test body; catches negations that look like checks but do nothing under errexit",
     "tests/test_notify_parity.py": "asserts the shell and Python notifiers still send the same card",
-    "tests/test_terraform_contract.py": "the module <-> settings.py env-var contract, the handler path, and the IAM actions the code needs \u2014 what the LocalStack run proves, without Docker",
+    "tests/test_terraform_contract.py": "the module <-> settings.py env-var contract, the handler path, and the IAM actions the code needs — what the LocalStack run proves, without Docker",
     "tests/test_build_api_zip.py": "packaging contract: determinism (digest stability) and --arch correctness for scripts/build_api_zip.py",
     "tests/test_gen_action_reference.py": "scripts/gen_action_reference.py output matches committed docs/action-reference.md",
     "tests/test_lint_docs.py": "scripts/lint_docs.py MagmaMoose documentation-shape rules",
     "tests/test_api.py": "FastAPI routes: request/response shapes, auth enforcement, error codes",
     "tests/": "122 pytest cases covering the API, script utilities, and tooling; no network, no AWS (moto + a generated RSA key)",
-    "terraform/localstack/smoke.py": "end-to-end invariants against LocalStack \u2014 the only thing that proves the wiring",
-    "tests/test_input_targets.py": "the applicability map is generated, complete, and matches action.yml's defaults; every target-only input carries its target's prefix"
+"terraform/localstack/smoke.py": "end-to-end invariants against LocalStack \u2014 the only thing that proves the wiring",
+    "tests/test_input_targets.py": "the applicability map is generated, complete, and matches action.yml's defaults; every target-only input carries its target's prefix",
+    "tests/test_workers_bindings.py": "every wrangler.toml binding appears in `wrangler deploy --dry-run`; fails rather than skips under TREMVOK_REQUIRE_WRANGLER=1; also runs the dry-run bundle's /webmcp.js in an empty context",
+    "tests/test_docs_router.py": "runs the router's node:test suite (workers/docs-router/test/router.test.mjs), pins the llms.txt layout the router parses against gen_docs_index.py, and the router's origin against its route; fails rather than skips under TREMVOK_REQUIRE_NODE=1",
+    "tests/test_gen_docs_index.py": "the corpus generator: URL shape detected from the built site, pages the build excluded left out, intraword underscores, fenced code excluded, byte-stable output",
+    "tests/test_gen_docs_seo.py": "the page-SEO step against a real Material build: unique descriptions, escaped once, extra.seo through INHERIT (LegacyConfig is a Mapping, not a dict), idempotent reruns, existing tags and twins left alone, twin links resolved like MkDocs, step ordering in action.yml",
+    "tests/test_gen_docs_agents.py": "the agent-readiness step against a real Material build: digest of the bytes written, skill front matter agrees with the index, nothing promised the build did not write, one relative script tag per page, auth.md only at a host root, idempotent, the site's own files kept, step order and include-hidden-files in action.yml",
+    "tests/test_docs_webmcp.py": "runs tests/js/docs_webmcp.test.mjs: the site WebMCP script's own bytes in a page-shaped vm context; fails rather than skips under TREMVOK_REQUIRE_NODE=1",
+    "tests/test_notify.py": "notify.py unit tests: Slack payload shape, Teams adaptive card, non-HTTPS refusal, fanout, notify policy matrix",
+    "tests/test_oidc.py": "RS256 verification: valid token, tampered payload, wrong audience/issuer, expiry, leeway, pinned JWKS, authorize deny-by-default",
+    "tests/test_store.py": "DynamoDB store: record/read, idempotency token dedup and compensation, per-repository isolation, history ordering and TTL",
+    "tests/test_gen_input_targets.py": "gen_input_targets.py: marker parsing, target scoping, round-trip, check mode, stale detection"
   }
 }

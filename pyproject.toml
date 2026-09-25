@@ -111,8 +111,13 @@ dev = [
     # v1 rather than v2 because v2 is not pip-installable, and the runner images have neither
     # `unzip` nor sudo to install it the official way.
     "awscli",
+    # tests/test_gen_docs_seo.py builds a real Material site and reads what it emitted, so
+    # the tests need the theme, not only the `docs` group that publishes this site. Brimyr
+    # syncs the project and this group and nothing else: without it here that suite is
+    # skipped on the quality gate and its patch coverage reads as a fraction of the truth.
+    "mkdocs-material==9.7.7",
 ]
-docs = ["mkdocs-material>=9.5"]
+docs = ["mkdocs-material==9.7.7"]
 
 [[tool.mypy.overrides]]
 module = ["boto3", "boto3.*", "botocore", "botocore.*", "mangum", "mangum.*"]

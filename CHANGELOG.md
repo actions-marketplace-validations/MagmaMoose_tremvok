@@ -7,6 +7,306 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`target: azure-apim-policy`**: publish a directory of policy documents (`api.xml` for the API
+  scope, `<operation-id>.xml` per operation) into an Azure API Management API that already
+  exists. All or nothing: API Management compiles a policy only when it is published, so the
+  current policy at every scope is read first, and if any document is refused the scopes already
+  replaced are put back (or cleared, where they had none). A document for an operation the API
+  does not have is refused before anything is published, and a pull request publishes nothing.
+  New inputs `apim-service-name`, `apim-resource-group`, `apim-api-id` and `apim-policy-format`
+  (`rawxml` by default); the `azure-` sign-in inputs and `artifact-path` apply to it too. A new
+  page, *Azure: a Function or API Management?*, says when to use it rather than
+  `azure-functions-zip`.
+- **Docs sites are agent-ready by default.** A step after the page metadata and the corpus
+  (`scripts/gen_docs_agents.py`, on by default as `pages-agent-ready`) writes into the built
+  site, for `github-pages` and `cloudflare-docs` alike:
+  - **An Agent Skills index** at `/.well-known/agent-skills/index.json` (Discovery RFC v0.2.0)
+    with one `SKILL.md` saying what the site covers, how to read it and how to cite it. It names
+    `llms.txt`, `llms-full.txt` and the markdown twins only when the build wrote them, and the
+    index carries the SHA-256 of the bytes written. The URL is path-absolute at the address the
+    site is served from.
+  - **WebMCP tools on every page** (`search_docs`, `read_page`, `list_pages`, `open_page`) from
+    a same-origin, dependency-free script, `assets/javascripts/webmcp.js`: feature-detected on
+    `document.modelContext` and `navigator.modelContext`, registered on load, and confined to
+    the site. A `script-src 'self'` CSP admits it; without the API it does nothing.
+  - **An `/auth.md`** for a site served at the root of its host, saying the docs need no
+    credentials and pointing at the MCP server's own RFC 9728 metadata, so it stays true when a
+    host routes `/auth.md` to an MCP Worker instead. A site mounted under a path gets none, and
+    neither does one behind Access (`cloudflare-docs-require-access`).
+  - **Configured by `extra.agents`** (`mcp`, `skill`, `webmcp`, `auth_md`), read from the
+    resolved config like `extra.seo`. Whatever the site already publishes of these is kept, and
+    a second run changes nothing.
+  - **On `github-pages` the Pages artifact includes dot-directories** while the step is on:
+    `actions/upload-pages-artifact` drops them by default, which would publish the site with no
+    skills index and no error.
+  - **The docs corpus step now runs before the Pages artifact is staged**, in the one block of
+    steps that write into the site. It still runs for `cloudflare-docs` only.
+- **The docs router serves the host's Agent Skills and WebMCP.**
+  `/.well-known/agent-skills/index.json` lists a skill for the host, then every public site's
+  skills from each site's own index, read over the service binding, re-addressed from the root
+  and cached like the `llms.txt` summaries.
+  Malformed entries are dropped, a name is listed once, and `PRIVATE_SITES` are never read. The
+  landing page loads `/webmcp.js` (`list_docs_sites`, `search_docs` across every site's
+  `llms.txt`, `read_page`, `open_site`), which its CSP already admits as `'self'`. Skills files
+  are served with CORS. The script is a string, not a function's source: Wrangler bundles with
+  esbuild's `keepNames`, whose `__name` helper does not exist in a browser, and
+  `tests/test_workers_bindings.py` runs the bundled router's script to keep it that way.
+- **[Agent readiness](docs/agent-readiness.md)** documents what a build writes, what the router
+  adds, and what only a site's owner can do: DNS-AID records, markdown negotiation on a host of
+  its own (a URL rewrite Transform Rule), and Workers routes for OAuth on a docs host.
+
+- **Per-page search, social and agent metadata for both docs targets.** A step after the
+  MkDocs build (`scripts/gen_docs_seo.py`, on by default as `pages-seo`) edits the built HTML
+  in place, for `github-pages` and `cloudflare-docs` alike:
+  - **A meta description per page.** Material prints `site_description` on every page with no
+    `description:` of its own, which search engines read as duplicate metadata. Each such page
+    now carries its first paragraph of prose, at most 155 characters and unique across the
+    site; warnings, tables, code, lists, link-only lines and a sentence cut in half by a code
+    block are passed over. The home page keeps `site_description`, and a home title that is
+    only the site name gains its lead clause.
+  - **Open Graph and Twitter tags, and one JSON-LD `@graph` per page**: `WebSite` and its
+    publisher everywhere, `TechArticle` and a nav-built `BreadcrumbList` below the home page.
+  - **A markdown twin of every page** at `<page>/index.md`, linked from the page with
+    `rel="alternate" type="text/markdown"`, relative links resolved the way MkDocs resolves
+    them for the HTML, and a `> Markdown source of <url>.` line under the title. `llms.txt`
+    links the twins, as llmstxt.org asks; the search index keeps citing the pages.
+  - **Configured by `extra.seo`** (locale, card image, publisher, author), read from the
+    resolved config, so a shared `mkdocs.base.yml` sets it once through `INHERIT`. A step and
+    not a plugin, for the reason the corpus is one.
+  - **Nothing a page already has is replaced or doubled**: a description that is not the
+    site's, Open Graph tags, Twitter tags, JSON-LD, a twin or its link. That keeps
+    docs.calebsargeant.com's own hook in charge of its pages, and makes a second run a no-op.
+  - A build that resolves no `site_url` is warned about, because MkDocs then writes no
+    canonical links and an empty sitemap. On `cloudflare-docs` the router address stands in
+    for the canonical link and `og:url`.
+- **`docs.magmamoose.com/` is a front door, not a 404.** The docs router answers the host root
+  itself: a landing page listing every site with its title and summary (canonical URL, Open
+  Graph and Twitter cards, `CollectionPage`/`ItemList` JSON-LD, light and dark), `/llms.txt`
+  indexing every site's own `llms.txt` and `llms-full.txt`, `/sitemap.xml` as a sitemap index,
+  `/robots.txt` with `Content-Signal`, `Sitemap:` and `Agentmap:` lines, RFC 9116
+  `/.well-known/security.txt` with an `Expires` computed per request, and `/favicon.ico`.
+  - **Nothing is listed twice.** Which sites exist still comes only from the `[[services]]`
+    blocks; what each is called comes from its own `llms.txt`, read over the service binding,
+    cached per isolate for five minutes and capped at 24 reads a request, because one request
+    may invoke at most 32 Workers. A site whose `llms.txt` cannot be read is listed by its
+    repository name, not dropped.
+  - **`PRIVATE_SITES` keeps an Access-gated site off the root once it is bound.** A service
+    binding call never passes through Access, so describing a bound private site would copy
+    its name and summary onto a public page. The private four are named before they are bound.
+  - **Discovery for agents:** `/.well-known/ai-catalog.json` (AI Catalog) and
+    `/.well-known/api-catalog` (RFC 9727) point at the docs MCP server's card, with CORS, an
+    hour of caching and ETags that answer `If-None-Match` with a 304, and
+    `/.well-known/mcp/server-card.json` redirects to the card. The landing page names them in
+    a `Link` header.
+  - **A page answers `Accept: text/markdown` with its `index.md` twin** when that is the first
+    media range and the site publishes one, and falls back to the HTML page when it does not.
+  - **Every response on the host carries HSTS, `nosniff`, `Referrer-Policy`,
+    `X-Frame-Options` and `Permissions-Policy`**, the site Workers' included; the router's own
+    pages add a strict CSP. `.txt` is served as `text/plain; charset=utf-8` and `.md` as
+    `text/markdown; charset=utf-8`, so curly quotes in an `llms.txt` survive a client that
+    does not assume UTF-8.
+  - **A URL without its trailing slash works.** The site Worker's redirect to `/setup/` was
+    relative to its own root, so `/tremvok/setup` landed on the host's 404; the router puts
+    the `/<repo>` prefix back on a path-absolute `Location`.
+  - **One spelling per path.** `/Tremvok/` or `/tremvok//setup/` is a 301 to the canonical
+    path, so duplicate URLs stop serving and the path an Access application is written for is
+    the only one that reaches a site.
+
+- **Google Cloud credentials for `target: terragrunt`.** `gcp-workload-identity-provider`,
+  `gcp-service-account` and `gcp-project-id` federate this run's GitHub OIDC token with a
+  workload identity pool before the first plan. No service-account key is stored anywhere: the
+  action writes the token and a small `external_account` credential configuration into
+  `RUNNER_TEMP` at 0600 and exports `GOOGLE_APPLICATION_CREDENTIALS`, which the Terraform
+  `google` provider and a GCS backend both read. A script rather than
+  `google-github-actions/auth`, for the reason this repository runs neither
+  `aws-actions/configure-aws-credentials` nor `azure/login`.
+  - **Both halves are proved at login**, because they fail alike from inside Terraform and have
+    different fixes: an STS exchange refused means the pool's issuer or attribute condition does
+    not match this repository and ref; an impersonation refused means it does, and the
+    `roles/iam.workloadIdentityUser` binding is missing.
+  - A pool name passed where a provider resource name belongs is refused before any call.
+  - **AWS needed nothing.** `aws-role-to-assume` has always applied to this target — the step is
+    gated on the input rather than on a target — and the assumed-role session covers both the S3
+    backend and the `aws` provider. A contract test now pins that for all three clouds, because
+    the symptom of a login step regaining a target gate is not a missing input, it is a plan
+    that dies inside a provider.
+
+- **Azure credentials for `target: terragrunt`, and a check that says when they are missing.**
+  `azure-client-id`, `azure-tenant-id` and `azure-subscription-id` now apply to the terragrunt
+  target: the action signs in with this run's OIDC token before the first plan, so
+  `provider "azurerm"` finds a session in its default chain. The step is gated on the input
+  rather than on a target, like `aws-role-to-assume` already was.
+  - **This is the provider's credential, not the state backend's.** `terragrunt-stack-env`
+    supplies the backend's, which is why a run without this reads and writes state perfectly
+    well and then dies at the plan with `could not configure AzureCli Authorizer: … Please
+    run 'az login'`, once per stack, pointing at a `provider.tf` a `generate` block wrote.
+  - **`terragrunt-credential-preflight`** (`auto` | `warn` | `off`, default `auto`) reads the
+    `provider` blocks of every discovered stack and of every parent directory up to
+    `terragrunt-root`, and fails before the first plan when a cloud they name has no
+    credential on this runner. It knows azurerm/azuread/azapi, aws, google/google-beta and
+    vcd; an unrecognised provider is passed over in silence. A provider block that configures
+    its own authentication is not checked, which is the exemption that keeps it from being a
+    check people switch off.
+  - Run per stack with that stack's own environment, so a credential arriving through
+    `terragrunt-stack-env` counts. It proves a credential is present, never that it works.
+  - **Behaviour change for existing terragrunt callers**: a run whose providers have no
+    credential now fails at the preflight instead of at the plan. It was going to fail either
+    way; `warn` restores the old order if you need it.
+
+- **The docs corpus, on `target: cloudflare-docs`.** The build writes `llms.txt` and
+  `llms-full.txt` into the site before publishing it, and generates a search index of every
+  page (`cloudflare-docs-index`, on by default, no credentials). With
+  `cloudflare-docs-index-bucket` set, a deploy publishes that index to R2 as
+  `index/<repo>.json`, the corpus the documentation MCP servers read (ADR-0005).
+  - **Published after the site deployed, never before**, and never from a pull request: one
+    key per repository, so a preview would overwrite the shared corpus with an unmerged branch.
+  - **Citations use the router's address** (`https://<cloudflare-docs-host>/<path>/`) when a
+    host is set, rather than `site_url`, so a stale `mkdocs.yml` cannot put a wrong link into
+    every answer an agent gives.
+  - **Not failure-isolated.** A deploy that silently failed to publish the index would be green
+    while agents read the previous commit's documentation.
+  - A build step rather than a MkDocs plugin: a repo that declares `plugins:` in its own
+    `mkdocs.yml` silently discards every entry in the shared `mkdocs.base.yml`.
+
+- **`target: cloudflare-docs`** — the same strict MkDocs build as `github-pages`, published to
+  Cloudflare Workers Static Assets. The canonical address becomes `https://<host>/<repo>/`,
+  and one hostname serves every repository by path. Implements the hosting half of
+  [ADR-0005](https://github.com/MagmaMoose/nievah/blob/main/docs/adr/0005-docs-sites-and-mcp-surfaces.md);
+  the local decision record is `.claude/decisions/0004-docs-on-workers-static-assets.md`.
+  - **Dispatch is over a service binding, never an HTTP proxy.** A proxy needs a public origin
+    hostname per site, which `workers_dev = false` exists to prevent, and proxying an
+    Access-gated origin moves the gate off the user and onto the router.
+  - **One job, not two.** The `github-pages` shape needs a second job only because
+    `actions/deploy-pages` requires `pages: write` and the `github-pages` environment, which a
+    composite action cannot declare. Wrangler requires neither.
+  - **A pull request publishes nothing.** These Workers carry no route and no workers.dev URL,
+    so there is no address a preview could be served from. The strict build is the check.
+  - **An empty site directory is refused**, because publishing nothing over a site that is
+    currently serving succeeds.
+  - New inputs: `cloudflare-docs-host`, `cloudflare-docs-path` (defaults to the repository
+    name), `cloudflare-docs-require-access`. The `pages-` build inputs and the `cloudflare-`
+    credential inputs are now shared with this target.
+
+- **`cloudflare-docs-require-access`** — refuse to publish unless a Cloudflare Access
+  application actually covers `<cloudflare-docs-host>/<cloudflare-docs-path>`. This restores
+  the `require-access` enforcement removed in `83ebc48` and deferred by ADR-0003.
+  - Its three outcomes are never collapsed: covered, not covered, and **could not tell**. A
+    403 from a token lacking `Access: Apps` read looks very like an account with no
+    applications, and reading the first as the second publishes a private site to the open
+    internet while reporting that it checked.
+  - Needs the `Access: Apps` READ permission, which Cloudflare's "Edit Cloudflare Workers"
+    token template does not include. The failure message says so.
+
+- **CI verifies every Wrangler binding with `wrangler deploy --dry-run`.** A binding is only
+  real if Wrangler prints it: the rate-limit block takes `name` where every other binding takes
+  `binding`, and a config that gets it wrong deploys a Worker that throws on its first request.
+  The check fails rather than skips when Node is absent, so it cannot become a required check
+  that never reports.
+
+- **The docs router is deployed by CI** (`.github/workflows/docs-router.yml`), and its routing
+  table covers the fleet rather than the four repositories it was sketched with. Adding a
+  repository's docs to `docs.magmamoose.com` is adding a `[[services]]` block and redeploying,
+  and a redeploy nothing performs is a path that 404s with a green build everywhere.
+  - **A binding to a Worker that has not published yet fails the whole deploy**, with
+    `Service binding '<NAME>' references Worker '<service>' which was not found [code: 10143]`.
+    It is not degraded to a dead route, so the table can never run ahead of the site Workers.
+    That is the opposite of a missing binding, which 404s quietly.
+  - caldrith, dunmir, nievah and noctyr are deliberately absent until their Access
+    applications exist and they have published once; `cloudflare-docs-require-access` refuses
+    their deploy until then.
+  - A pull request is a dry run, never a preview: `--preview-alias` needs a workers.dev
+    subdomain and `workers_dev = false` is what the service-binding design rests on.
+
+- **`cloudflare-verify-config`** (on by default): before any `cloudflare-workers` publish, run
+  `wrangler deploy --dry-run` and refuse to publish when Wrangler reports configuration it will
+  not apply. A misspelled `[[r2_bucket]]` is only an "Unexpected fields" warning, Wrangler exits
+  0, and the Worker deploys with no bucket; a top-level binding an `--env` deploy does not
+  inherit is also only a warning. Verified against Wrangler 4.114.0 and 4.127.1. Costs one extra
+  bundle per run.
+
+### Changed
+
+- **The docs router can send `/` to a documentation hub kept elsewhere.** With
+  `LANDING_REDIRECT` set to an `https` URL in its `wrangler.toml`, `docs.magmamoose.com/`
+  answers a `302` there instead of serving the landing page, for every client except one whose
+  first media range is `text/markdown`, which still gets the `llms.txt` index. The redirect
+  keeps the discovery `Link` header, with absolute targets so a client carrying it across the
+  hop cannot resolve them against the other host, and reads no site's `llms.txt`. Blank or not
+  an `https` URL, and the landing page is served as before. It ships blank, to be set to
+  `https://www.magmamoose.com/documentation/` once that page is live (MagmaMoose/website#82).
+- **`cloudflare-docs-require-access` is checked only when a publish is actually going to
+  happen.** It was gated on the target alone, so it also ran in `preview` mode — on a pull
+  request, which for this target publishes nothing at all. In a repository that sets it, every
+  documentation pull request therefore failed on a deploy it was never going to do. A required
+  check that is always red is one people learn to merge past, which costs more than the early
+  warning is worth. `github-pages` never had this because v1's caller passed `target: none` on
+  a pull request and every target-gated step fell away with it; `mode` replaced that and this
+  step did not get the memo.
+
+- **`dry-run` on `cloudflare-workers` now runs Wrangler's own `wrangler deploy --dry-run`**
+  instead of logging the command. It bundles and validates the Worker, uploads nothing, and
+  calls no API, so it no longer requires `cloudflare-api-token` or `cloudflare-account-id`. A
+  dry run that does not bundle now fails the job. This makes a pull request validatable without
+  a preview upload, which matters for a Worker whose bindings reach private data.
+
+- **`verify-method`** — the HTTP method `verify-url` is requested with, `GET` by default.
+  A GET cannot verify a POST-only endpoint at all: a webhook receiver binds POST and nothing
+  else, so a GET reaches no function and the platform answers 404 — which is also what a
+  package containing no functions returns, leaving the check unable to tell a working deploy
+  from a broken one. `verify-method: POST` with `verify-status: 401` asserts instead that the
+  function is bound and that its signature check refuses an unsigned request. The method
+  survives a redirect (`--post301/302/303`), because curl otherwise downgrades a redirected
+  POST to a GET and quietly changes the assertion.
+
+- **`target: azure-functions-zip`** — publish a zip to an Azure Function App and prove the app
+  serves it. Signs in with `azure-client-id`/`azure-tenant-id`/`azure-subscription-id` over
+  this run's GitHub OIDC token against an Entra ID federated credential, so no publish profile
+  is stored anywhere, then deploys with `az functionapp deployment source config-zip` and
+  polls the app until it answers.
+  - The CLI's exit code is **not** treated as the outcome. `config-zip` prints
+    `Operation returned an invalid status 'Bad Request'` and exits non-zero over deploys that
+    succeeded, so a non-zero exit is corroborated against `WEBSITE_RUN_FROM_PACKAGE` and only
+    then called a failure.
+  - Platform state is not treated as evidence either: a Function App reports `state: Running`
+    and `availabilityState: Normal` while returning 503. An HTTP answer from the app is what
+    ends the run, and a first deploy retries through the 503 a freshly created Consumption app
+    returns until content is first published.
+  - A package whose `functions.metadata` and `.azurefunctions/` are not at the archive root is
+    refused, because that package deploys cleanly and then 404s on every route.
+  - A pull request publishes nothing unless `functions-slot` is set: a Linux Consumption plan
+    has no deployment slots, so there is no destination that does not take production traffic.
+
+### Fixed
+
+- **A large Terragrunt plan comment was never posted.** `notify-pr.sh` handed the whole request
+  to `curl` as one argument, and a plan across many stacks is past the kernel's 128 KiB cap on a
+  single argument once JSON-escaped: the post died with `Argument list too long` and the run said
+  only "could not post the pull-request comment". The request now reaches `curl` as a file and
+  the body reaches `jq` on stdin. The two write calls also pass `--fail`, so a post GitHub
+  refuses is a warning rather than a logged success.
+- **The plan comment fits GitHub's 65,536-character limit.** Excerpts share `COMMENT_BUDGET`
+  (60,000 bytes) once the table and the apply section have taken theirs, and below 400 bytes each
+  they are left out for a pointer to the run. A stack with no changes gets its table row and no
+  excerpt, and terminal colour codes are stripped before an excerpt is measured. `notify-pr.sh`
+  cuts any other body that is still too long, and says so in the comment.
+
+## [2.0.0]
+
+Released as v1.0.26 and retagged: the breaking changes below are v2, and were only ever
+called v1.x because the release pipeline could not see them.
+
+### Fixed — the floating major tag
+
+- **`v1` no longer floats onto a breaking release.** `GitVersion.yml` teaches GitVersion
+  to read Conventional Commits, so a `feat!:` subject or a `BREAKING CHANGE:` footer bumps
+  the major and `feat:` bumps the minor. Until now GitVersion ran on its built-in defaults,
+  which only understand `+semver:` tokens: every release since v1.0.0 was a patch,
+  including the two that deleted the reusable workflows and renamed every docs input. The
+  release job then force-moved `v1` onto them, and nine repositories pinned to `@v1` were
+  handed the v2 contract without a version change to warn them.
+
 ### Changed — BREAKING (v2)
 
 - **The `docs` target is now `github-pages`,** and its inputs are prefixed `pages-` rather
@@ -17,18 +317,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it is publishing. A pull request (`mode: preview`) or a `dry-run` now builds and checks
   without staging an artifact, which is what those already mean everywhere else.
 
-- **One action, five targets.** `target` is now the deployment target
-  (`docs` · `s3-cloudfront` · `lambda-zip` · `terragrunt` · `ansible`) and is the only
-  required input. At v1 `target` meant the docs destination; that is now `docs-target`, and
-  every other docs input gained a `docs-` prefix. Full table in
-  [docs/migration.md](docs/migration.md). **`@v1` is unchanged and keeps working.**
+- **One action, six targets.** `target` is now the deployment target
+  (`github-pages` · `s3-cloudfront` · `lambda-zip` · `terragrunt` · `ansible` ·
+  `cloudflare-workers`) and is the only required input. At v1 `target` meant the docs
+  destination. Full table in [docs/migration.md](docs/migration.md). **`@v1` is frozen at
+  v1.0.18 and keeps working** — it was briefly not, see *Fixed* below.
 - **The `deploy/` entry point is gone.** `MagmaMoose/tremvok/deploy@v1` no longer exists; its
   three targets are targets on the root action, with `aws-`, `s3-`, `cloudfront-` and
   `lambda-` prefixes on its inputs. Its scripts moved from `deploy/scripts/` to `scripts/`.
 - **The reusable workflows are gone.** `.github/workflows/docs.yml` and
   `docs-github-pages.yml` are removed: one action is the whole product, and a second callable
   surface for one target was a place for the two to disagree. The Pages deploy job they
-  carried is ten lines in the caller's own workflow — `examples/docs.yml`.
+  carried is ten lines in the caller's own workflow — `examples/github-pages.yml`.
 - **An inapplicable input now fails the run.** `validate-inputs.sh` checks every input
   against the selected target before the checkout and reports every mistake at once. At v1
   an undeclared input was a warning nothing acted on.
@@ -36,6 +336,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   purpose; the notification used to call that a failed deploy.
 - `mode: auto` now resolves `schedule` and `pull_request_review`, which it used to refuse —
   breaking the Terragrunt drift run on its own cron.
+
+- **A standing approval no longer applies on a plain `pull_request` run.** Under
+  `terragrunt-apply: auto` the apply now needs an event that authorises it: a
+  `pull_request_review` whose review is an approval, or the merged-push path with
+  `terragrunt-apply-on-merge` on. Reading an approval the run merely found standing is no
+  longer enough.
+
+  The sequence this prevents: a reviewer approves commit A, the author pushes commit B, and
+  the `pull_request` run for B reads the same approval and applies B. Nobody reviewed B. It
+  is only safe where branch protection dismisses stale reviews on push, which the action can
+  neither see nor require, so the guard is in the action.
+
+  This is a behaviour change for existing callers and it ships rather than hiding behind an
+  input, because an input defaulting to the unsafe answer is the same defect with a knob on
+  it. What changes in practice: a run that used to apply now plans, comments and publishes
+  the check as `action_required` with the title `Approved, but not applied for this commit`.
+  If you relied on the old behaviour, add
+  `pull_request_review: { types: [submitted, dismissed] }` to your triggers, which is what
+  `docs/setup.md` has always shown, and re-approving applies the commit in front of you. For
+  a one-off, `terragrunt-apply: force` applies by hand for an actor named in
+  `terragrunt-apply-operators`. Two smaller consequences of the same rule: a run triggered by
+  a COMMENTED or CHANGES_REQUESTED review plans rather than spending an older approval, and a
+  `workflow_dispatch` that names a pull request with `terragrunt-pull-request` plans it,
+  since dispatching a workflow is not approving a commit.
 
 ### Added
 
@@ -205,6 +529,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the action they call — which is a large part of why the surfaces merged.
 - `preflight.sh` no longer skips `docs` and `ansible` runs for want of an AWS credential
   neither target uses.
+- **`preflight.sh` no longer skips the `terragrunt` target for want of an AWS credential**,
+  which made the whole target a no-op on any estate that is not on AWS: every terragrunt step
+  in `action.yml` is gated on that skip. Terragrunt is provider-agnostic, and its credentials
+  come from the backend and provider blocks in the caller's own configuration, which may be
+  AWS, Azure, GCP, a private cloud, or several in one run. `terragrunt-stack-env` exists to
+  carry exactly those. The requirement now covers `s3-cloudfront` and `lambda-zip` alone, the
+  two targets that call AWS themselves. A terragrunt run that genuinely needed AWS now fails
+  in the provider, with a message naming the provider, which is the better of the two errors.
+- **A change to a shared `root.hcl` or any other file above the stacks now maps to the stacks
+  beneath it.** `terragrunt-discover.sh` walked up from a changed path to its nearest
+  enclosing stack and stopped, so a file that sits ABOVE every stack had no enclosing stack
+  and mapped to nothing: the run reported zero stacks and published the check as SUCCESS with
+  "No Terraform stacks affected", and the pull request merged green with nothing planned and
+  nothing applied. A changed path inside `terragrunt-root` with no enclosing stack now maps to
+  the stacks beneath the nearest of its ancestors that holds any, so a shared root affects
+  every stack that includes it through `find_in_parent_folders`, and a path directly in
+  `terragrunt-root` affects every stack there is. A file that IS inside a stack still maps to
+  that one stack, which is narrower and already right.
+
+  **This reverses the rule that a change under `modules/` maps to nothing.** That rule was
+  argued on the grounds that guessing which stacks use a module from its path is how a module
+  tidy-up plans the whole estate, and that the scheduled drift run covers what is missed. What
+  it did in practice was publish SUCCESS with "No Terraform stacks affected" for a real change
+  to shared logic, merge green, and apply nothing. The two errors are not symmetric: planning
+  is read-only and an apply only applies what its plan found, so a module edit that changes no
+  stack produces an empty diff and costs wall-clock, while the narrow answer costs
+  correctness. A module usually lives in a directory the exclude list keeps out of the stack
+  list, so no stack sits beneath it and only walking up reaches them. It stays bounded by
+  stopping at the first ancestor that holds stacks, so a separate estate under the same root
+  is untouched.
 - `terragrunt-bootstrap.sh`'s checksum lookup runs with `|| true`: with `pipefail` on, a
   `grep` that matched nothing made the assignment non-zero and `set -e` exited the script
   silently, exactly where the loudest possible failure is wanted.
@@ -247,4 +601,5 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   licence is now the one that appears FIRST in the file, since a licence states its own
   terms before its carve-outs.
 
-[Unreleased]: https://github.com/MagmaMoose/tremvok/commits/main
+[Unreleased]: https://github.com/MagmaMoose/tremvok/compare/v2.0.0...main
+[2.0.0]: https://github.com/MagmaMoose/tremvok/releases/tag/v2.0.0

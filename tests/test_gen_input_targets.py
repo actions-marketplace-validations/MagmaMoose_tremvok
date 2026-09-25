@@ -28,11 +28,14 @@ import yaml
 
 ALL_TARGETS = [
     "github-pages",
+    "cloudflare-docs",
     "s3-cloudfront",
     "lambda-zip",
     "terragrunt",
     "ansible",
     "cloudflare-workers",
+    "azure-functions-zip",
+    "azure-apim-policy",
 ]
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ACTION = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))

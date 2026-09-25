@@ -21,7 +21,10 @@ other**; a change that couples them is the change to push back on.
    `terraform/README.md`, not a default. A deployment *target* is a different thing: it runs in
    the caller's account, on the caller's bill, so any supported provider is fine, and
    `cloudflare-workers` is one of them. The API stays Lambda; a Worker is not an alternative
-   home for it. See `.claude/decisions/0003-cloudflare-workers-target.md`.
+   home for it. See `.claude/decisions/0003-cloudflare-workers-target.md`. Exception:
+   `workers/docs-router/` is MagmaMoose org infrastructure (fleet-wide, not Tremvok's backend),
+   sourced here because this is the docs toolchain. See
+   `.claude/decisions/0004-docs-on-workers-static-assets.md`.
 2. **bash 3.2.** GitHub's macOS runners ship it. No `${x,,}`, `${x^}`, `mapfile`, `readarray`,
    `declare -A`. `tests/bats/portability.bats` fails the build if one comes back.
 3. **`action.yml` is glue.** Logic goes in `scripts/`, where it can be tested. If you find

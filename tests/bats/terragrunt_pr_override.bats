@@ -63,14 +63,14 @@ STUBEOF
   TG_PULL_REQUEST='1234/../../secrets' run bash "${SCRIPTS}/terragrunt-changed-files.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"terragrunt-pull-request: '1234/../../secrets' is not a pull-request number. Digits only, e.g. 1234."* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "an empty terragrunt-pull-request is refused too, rather than building /pulls//files" {
   run bash "${SCRIPTS}/terragrunt-pr-head.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"is not a pull-request number"* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "the override beats the event number, so a manual run cannot gate on one pull request and comment on another" {
@@ -80,14 +80,14 @@ STUBEOF
   grep -q '/pulls/1234/reviews' "$STUB_LOG"
   grep -q '/issues/1234/comments' "$STUB_LOG"
   refute grep -q '/pulls/7/' "$STUB_LOG"
-  ! grep -q '/issues/7/' "$STUB_LOG"
+  refute grep -q '/issues/7/' "$STUB_LOG"
 }
 
 @test "the check run is published against the fetched head sha, so an action_required check cannot land on a default-branch commit no pull request contains" {
   TG_PULL_REQUEST=1234 run bash "${SCRIPTS}/terragrunt-changed-files.sh"
   [ "$status" -eq 0 ]
   grep -q 'shafromapi1234' "$STUB_LOG"
-  ! grep -q '"head_sha": "shafromevent"' "$STUB_LOG"
+  refute grep -q '"head_sha": "shafromevent"' "$STUB_LOG"
 }
 
 @test "a pull request this run cannot read ends it before terragrunt is invoked, so a wrong number is never a plan-only run with no check and no explanation" {
@@ -95,7 +95,7 @@ STUBEOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"could not read pull request #1234"* ]]
   refute grep -q 'terragrunt plan' "$STUB_LOG"
-  ! grep -q 'check-runs' "$STUB_LOG"
+  refute grep -q 'check-runs' "$STUB_LOG"
 }
 
 @test "a pull request with no head commit is refused, because a check run has to land somewhere" {
@@ -103,7 +103,7 @@ STUBEOF
     run bash "${SCRIPTS}/terragrunt-changed-files.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"no head commit"* ]]
-  ! grep -q 'terragrunt plan' "$STUB_LOG"
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
 }
 
 @test "a fork pull request named by hand is refused, so the manual path cannot aim a deploy credential at fork code the automatic path already refuses" {
@@ -111,7 +111,7 @@ STUBEOF
     TG_PULL_REQUEST=1234 run bash "${SCRIPTS}/terragrunt-changed-files.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"comes from a fork"* ]]
-  ! grep -q 'terragrunt plan' "$STUB_LOG"
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
 }
 
 @test "a head sha that is not in the checked-out tree warns and continues, so forgetting ref: is visible rather than a silently wrong plan" {
@@ -138,9 +138,24 @@ STUBEOF
   refute grep -q 'shafromapi1234' "$STUB_LOG"
 }
 
-@test "the override plus an approval applies, so a named pull request is a full path and not a plan-only curiosity" {
+@test "the override plus terragrunt-apply: force applies, so a named pull request is a full path and not a plan-only curiosity" {
+  # `force` and not a standing approval. A manual run is not an approval: nobody re-approved
+  # this commit by dispatching the workflow, and applying on an approval the run merely
+  # observed is how a commit pushed after that approval gets applied unreviewed. The manual
+  # apply has its own authorisation, `terragrunt-apply-operators`, and this is it.
+  export APPROVERS='[{"user":{"login":"reviewer"},"state":"APPROVED","submitted_at":"2026-08-18T10:00:00Z"}]'
+  APPLY=force GITHUB_ACTOR=operator APPLY_OPERATORS=operator TG_PULL_REQUEST=1234 \
+    run bash "${SCRIPTS}/terragrunt-changed-files.sh"
+  [ "$status" -eq 0 ]
+  grep -q 'terragrunt apply' "$STUB_LOG"
+  # And the apply is still aimed at the named pull request, not at the event's.
+  grep -q '/issues/1234/comments' "$STUB_LOG"
+}
+
+@test "the override plus an approval nobody re-gave plans and reports, so a manual run cannot spend an approval left on an earlier commit" {
   export APPROVERS='[{"user":{"login":"reviewer"},"state":"APPROVED","submitted_at":"2026-08-18T10:00:00Z"}]'
   TG_PULL_REQUEST=1234 run bash "${SCRIPTS}/terragrunt-changed-files.sh"
   [ "$status" -eq 0 ]
-  grep -q 'terragrunt apply' "$STUB_LOG"
+  refute grep -q 'terragrunt apply' "$STUB_LOG"
+  grep -q 'Approved, but not applied for this commit' "$STUB_LOG"
 }

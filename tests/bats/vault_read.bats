@@ -61,7 +61,7 @@ STUBEOF
   # five minutes.
   run bash "${SCRIPTS}/vault-read.sh" '/secret/data/team/app#ssh_private_key'
   grep -q '/v1/secret/data/team/app' "$STUB_LOG"
-  ! grep -q '/v1//' "$STUB_LOG"
+  refute grep -q '/v1//' "$STUB_LOG"
 }
 
 @test "a namespace is sent only when one is set" {
@@ -84,7 +84,7 @@ STUBEOF
   VAULT_BODY='{"data":{"data":{"other_field":"SUPERSECRETVALUE"}}}' \
     run bash "${SCRIPTS}/vault-read.sh" 'secret/data/team/app#ssh_private_key'
   [ "$status" -ne 0 ]
-  ! [[ "$output" == *"SUPERSECRETVALUE"* ]]
+  [[ "$output" != *"SUPERSECRETVALUE"* ]]
 }
 
 @test "a null field is a failure, not the four characters null" {
@@ -93,7 +93,7 @@ STUBEOF
   VAULT_BODY='{"data":{"data":{"ssh_private_key":null}}}' \
     run bash "${SCRIPTS}/vault-read.sh" 'secret/data/team/app#ssh_private_key'
   [ "$status" -ne 0 ]
-  ! [[ "$output" == *"null"* ]] || [[ "$output" == *"no field"* ]]
+  [[ "$output" != *"null"* || "$output" == *"no field"* ]]
 }
 
 @test "403 says the policy is wrong, not that the secret is missing" {
@@ -118,7 +118,7 @@ STUBEOF
   run bash "${SCRIPTS}/vault-read.sh" 'secret/data/team/app'
   [ "$status" -ne 0 ]
   [[ "$output" == *"<path>#<field>"* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "a missing addr or token is refused before any request is made" {
@@ -126,12 +126,12 @@ STUBEOF
   [ "$status" -ne 0 ]
   VAULT_TOKEN= run bash "${SCRIPTS}/vault-read.sh" 'secret/data/team/app#k'
   [ "$status" -ne 0 ]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "the response body is never echoed, whatever the status" {
   VAULT_STATUS=500 VAULT_BODY='{"errors":["token SUPERSECRETVALUE is bad"]}' \
     run bash "${SCRIPTS}/vault-read.sh" 'secret/data/team/app#k'
   [ "$status" -ne 0 ]
-  ! [[ "$output" == *"SUPERSECRETVALUE"* ]]
+  [[ "$output" != *"SUPERSECRETVALUE"* ]]
 }

@@ -1,12 +1,12 @@
 # Tremvok
 
-> Tremvok is one GitHub Marketplace composite action for the whole deploy side: pick a `target`, one of `github-pages` (MkDocs to GitHub Pages), `cloudflare-workers` (a Worker and its static assets, via Wrangler), `s3-cloudfront`, `lambda-zip`, `terragrunt` or `ansible`, and it deploys, verifies the result actually serves, and announces it. Every input is validated against the selected target, so an input belonging to another target is a hard error rather than a silent no-op. There is also an optional FastAPI service on AWS Lambda that records deployment history and fans notifications out, authenticated by GitHub OIDC. Install with `uses: MagmaMoose/tremvok@v2` (`@v1` is the docs-only action and still works). It is the deploy-side counterpart to Diatreme, which decides what version is released.
+> Tremvok is one GitHub Marketplace composite action for the whole deploy side: pick a `target`, one of `github-pages` (MkDocs to GitHub Pages), `cloudflare-workers` (a Worker and its static assets, via Wrangler), `azure-functions-zip` (a zip to an Azure Function App), `s3-cloudfront`, `lambda-zip`, `terragrunt` or `ansible`, and it deploys, verifies the result actually serves, and announces it. Every input is validated against the selected target, so an input belonging to another target is a hard error rather than a silent no-op. There is also an optional FastAPI service on AWS Lambda that records deployment history and fans notifications out, authenticated by GitHub OIDC. Install with `uses: MagmaMoose/tremvok@v2` (`@v1` is the docs-only action and still works). It is the deploy-side counterpart to Diatreme, which decides what version is released.
 
 This repository has two surfaces: the **composite action** (`action.yml` + `scripts/*.sh`) and the **API** (`src/tremvok/`, FastAPI on Lambda). They communicate over HTTP and neither imports the other. Most users only need the action; the API is optional and off unless `api-url` is set.
 
 ## Documentation
 
-- [README](README.md): user guide: quickstart, the six targets, the most-used inputs, skip and failure-isolation behaviour.
+- [README](README.md): user guide: quickstart, the nine targets, the most-used inputs, skip and failure-isolation behaviour.
 - [Architecture](docs/architecture.md): how the pieces fit, and the specific production failures each guard exists to prevent.
 - [Action reference](docs/action-reference.md): every input and output, which target each applies to, and the permissions each target needs. Generated from action.yml.
 - [Migrating to v2](docs/migration.md): the v1 and `deploy/` rename tables, and what changed behaviourally.
@@ -20,6 +20,8 @@ This repository has two surfaces: the **composite action** (`action.yml` + `scri
 
 - `s3-cloudfront`: sync a built static site to S3 with per-class cache headers, invalidate CloudFront, previews under their own key prefix. Refuses to sync an empty artifact directory, because `sync --delete` from an empty source empties the site and exits 0.
 - `lambda-zip`: upload to an immutable S3 key, update the function, publish a version, move an alias. A preview publishes a version without moving the alias. The deployed `CodeSha256` is verified against the local artifact.
+- `azure-functions-zip`: publish a zip with `az functionapp deployment source config-zip`, then poll the app until it answers. The CLI's exit code is not trusted — it reports `Bad Request` over deploys that succeeded — so a non-zero exit is corroborated against `WEBSITE_RUN_FROM_PACKAGE` before it is called a failure. Refuses a package whose `functions.metadata` and `.azurefunctions/` are not at the archive root, which otherwise deploys cleanly and serves nothing.
+- `azure-apim-policy`: publish a directory of policy documents (`api.xml`, `<operation-id>.xml`) into an API Management API that already exists, with `az rest`. All or nothing: API Management compiles a policy only on publish, so the current policy at every scope is read first and put back if any document is refused. Refuses a document for an operation the API lacks. [Which Azure target](docs/azure-functions-or-api-management.md) says when to use it rather than a Function.
 - `terragrunt`: discover affected stacks, plan each, post a rolling pull-request comment, and apply only on an independent approval. Publishes a check run that can be made required, which is what enforces apply-before-merge. Replaces Atlantis, whose stored IAM credential is the reason to migrate.
 
 ## API

@@ -31,11 +31,14 @@ OUT = ROOT / "scripts" / "lib" / "input-targets.json"
 
 TARGETS = [
     "github-pages",
+    "cloudflare-docs",
     "s3-cloudfront",
     "lambda-zip",
     "terragrunt",
     "ansible",
     "cloudflare-workers",
+    "azure-functions-zip",
+    "azure-apim-policy",
 ]
 
 # The opening `<targets>:` marker. Bounded to one line so a description whose *body*

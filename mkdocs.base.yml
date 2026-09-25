@@ -25,13 +25,63 @@
 # than letting the site render wrong.
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# A repo still owns: site_name, site_description, site_url, repo_url, repo_name,
-# edit_uri, nav, and its accent colour (via the `docs_accent` template var).
+# A repo still owns: site_name, site_description, repo_url, repo_name, edit_uri, nav, and
+# its accent colour (via the `docs_accent` template var).
+#
+# `theme`, `extra` and `extra.seo` below are dicts, so a repo can override one key of them
+# (its own `theme.logo`, its own `extra.seo.image`) and keep the rest. `extra.social` is a
+# LIST: a repo that declares its own replaces the fleet's links outright, as draventis does.
+
+# ── site_url IS NOT ONE OF THEM ANY MORE ─────────────────────────────────────
+#
+# It used to be, and leaving it repo-owned is what the fleet had to show for it: six repos
+# still pointing at `magmamoose.github.io/<repo>/`, a host abandoned when the docs moved to
+# Cloudflare, and three with no `site_url` at all. MkDocs emits `<link rel="canonical">` and
+# its whole sitemap from this value, so a stale one tells every crawler and every agent that
+# the real page is somewhere that no longer serves it.
+#
+# It stopped being a repo's choice when the docs router landed: ADR-0005 fixes the address at
+# `https://docs.magmamoose.com/<repo>/`, where the path segment is the one the router
+# dispatches on. That is derivable from the repo name and nothing else, which makes it a
+# fleet fact — and `tremvok` is exactly what this file has and a per-repo mkdocs.yml does
+# not. A repo that genuinely needs a different address still wins by declaring its own
+# `site_url:`, because a scalar in the child overrides the parent.
+site_url: https://docs.magmamoose.com/tremvok/
+
+# Every page's footer. Linked, so each docs page points back at the organisation it belongs
+# to. Material prints this value unescaped, which is what lets it carry the link.
+copyright: '&copy; <a href="https://www.magmamoose.com/">Magma Moose</a>'
 
 theme:
   name: material
   icon:
     repo: fontawesome/brands/github
+  # ── The brand, from the one place it is published ──────────────────────────
+  #
+  # Absolute URLs into www.magmamoose.com, where the brand kit is generated and served
+  # (MagmaMoose/website, brand/ and assets/). Material passes both through MkDocs' `url`
+  # filter, which returns any URL with a scheme untouched, so nothing is copied into a
+  # repo and a regenerated asset reaches every site on its next build.
+  #
+  # The favicon is the parent's molten monogram: the one www.magmamoose.com and its product
+  # pages use, and the brand kit's pick for 16px, where it says the moose does not read.
+  # The header logo is the product's own badge. Every repo in the mkdocs.base.yml list in
+  # .github/settings.yml has one at this path, and all ten answered 200 on 2026-09-23.
+  #
+  # A REPO ADDED TO THAT LIST NEEDS `<repo>-badge.svg` AND `og-<repo>.png` PUBLISHED FIRST.
+  # Without them the header shows a broken image and every link preview loses its card,
+  # and nothing fails. The fix is in the website's brand kit, or a `theme.logo` and an
+  # `extra.seo.image` in that repo's own mkdocs.yml.
+  favicon: https://www.magmamoose.com/assets/favicon.svg
+  logo: https://www.magmamoose.com/brand/svg/products/tremvok-badge.svg
+  # House type. `font` is a dict, so it merges safely with a repo's own theme.* keys
+  # (see the merge trap above) — unlike `extra_css`, which is a list and would need a
+  # self-hosted stylesheet path per repo before it could replace Google Fonts here.
+  # That is a separate step behind deciding where the woff2 bytes live; this alone
+  # stops Material's own default (Roboto / Roboto Mono from fonts.gstatic.com).
+  font:
+    text: Sora
+    code: IBM Plex Mono
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -72,3 +122,62 @@ markdown_extensions:
   - attr_list
   - toc:
       permalink: true
+
+extra:
+  # The footer's icons. Only addresses that answered as the org's own on 2026-09-23: the
+  # GitHub organisation, and the LinkedIn company page (a non-existent company there 404s,
+  # so the 200 means something). They are also the `sameAs` of the publisher below.
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/MagmaMoose
+      name: Magma Moose on GitHub
+    - icon: fontawesome/brands/linkedin
+      link: https://www.linkedin.com/company/magmamoose
+      name: Magma Moose on LinkedIn
+
+  # ── Search, social and agent metadata ──────────────────────────────────────
+  #
+  # Read by the page-SEO step of MagmaMoose/tremvok's docs targets, which runs after
+  # `mkdocs build` and gives every page its own meta description, Open Graph and Twitter
+  # tags, a JSON-LD graph and a markdown twin (see tremvok's scripts/gen_docs_seo.py). A
+  # step and not a plugin, for the reason at the top of this file: a plugin would have to
+  # sit in `plugins:`, which is a list. MkDocs itself ignores this block, so it is inert on
+  # a tremvok pin that predates the step, and live on the first build after the pin moves.
+  seo:
+    # og:locale (the same one www.magmamoose.com publishes), and `inLanguage: en-GB` on
+    # every JSON-LD node.
+    locale: en_GB
+    # The link-preview card. Each product has its own 1200x630 card, the one the website's
+    # product pages use, so a docs link unfurls as the product rather than as the company.
+    # The alt text defaults to the repo's site_name, which is what the card shows.
+    image:
+      url: https://www.magmamoose.com/assets/og/og-tremvok.png
+      width: 1200
+      height: 630
+    # The Organization node www.magmamoose.com already publishes, by the same @id, so a
+    # crawler attaches every docs page to the entity it knows instead of minting a second
+    # Magma Moose. Also the TechArticle's author, since no person is named.
+    publisher:
+      type: Organization
+      id: https://www.magmamoose.com/#organization
+      name: Magma Moose
+      url: https://www.magmamoose.com/
+      logo: https://www.magmamoose.com/brand/png/logo/magma-moose-badge-512.png
+      same_as:
+        - https://github.com/MagmaMoose
+        - https://www.linkedin.com/company/magmamoose
+
+  # ── Agent readiness ────────────────────────────────────────────────────────
+  #
+  # Read by tremvok's agent-ready step (v2.12.0 and later; docs/agent-readiness.md there),
+  # which gives each site an Agent Skills index and skill, WebMCP tools on every page and,
+  # at the root of a host, an auth.md. Everything defaults from site_name and
+  # site_description except the one fleet fact: where the MCP server is, so a site's skill
+  # can send an agent to search every docs site at once rather than scrape this one.
+  #
+  # The public server only indexes public repositories. A repo with
+  # `docs_require_access: true` publishes nothing today; when it does, its own mkdocs.yml
+  # should set `extra.agents.mcp` to https://mcp.magmamoose.com/private (a dict key in the
+  # child wins over this one), or its skill will point at a server that cannot see it.
+  agents:
+    mcp: https://mcp.magmamoose.com/

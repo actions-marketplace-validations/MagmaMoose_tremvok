@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       pull_request:
-        description: 'Pull request number to plan or apply. Empty plans the default branch.'
+        description: 'Pull request number to plan. Empty plans the default branch. Applying is an approval, or terragrunt-apply: force.'
         type: string
         default: ''
 

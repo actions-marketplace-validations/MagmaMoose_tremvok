@@ -59,13 +59,37 @@ def test_defaults_in_the_map_match_the_action():
         assert data[name]["default"] == str(spec.get("default", "")), name
 
 
+# `github-pages` owns no input of its own, and that is correct rather than an oversight.
+# `cloudflare-docs` is its sibling — the same strict MkDocs build, a different publish — so
+# every `pages-` input is shared between the two, exactly as `aws-` is shared by the AWS
+# targets and `build-` by the targets that run a build. What distinguishes github-pages is
+# behaviour (it stages a Pages artifact and hands the deploy back to the caller), not an
+# input. A target owning no input AND sharing none would still be vapour, which is what the
+# assertion below keeps checking.
+SHARED_INPUTS_ONLY = {"github-pages"}
+
+
 @pytest.mark.parametrize(
     "target",
-    ["github-pages", "s3-cloudfront", "lambda-zip", "terragrunt", "ansible", "cloudflare-workers"],
+    [
+        "github-pages",
+        "cloudflare-docs",
+        "s3-cloudfront",
+        "lambda-zip",
+        "terragrunt",
+        "ansible",
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy",
+    ],
 )
 def test_every_target_owns_at_least_one_input(target):
     data = json.loads(MAP.read_text())["inputs"]
     owned = [n for n, s in data.items() if s["targets"] == [target]]
+    if target in SHARED_INPUTS_ONLY:
+        shared = [n for n, s in data.items() if target in s["targets"]]
+        assert shared, f"target {target!r} has no inputs at all, which cannot be right"
+        return
     assert owned, f"target {target!r} has no inputs of its own, which cannot be right"
 
 
@@ -79,7 +103,11 @@ def test_target_specific_inputs_are_named_for_their_target():
         "github-pages": ("pages-",),
         "s3-cloudfront": ("s3-", "cloudfront-", "artifact-"),
         "lambda-zip": ("lambda-", "s3-", "artifact-"),
-        "terragrunt": ("terragrunt-",),
+        # `gcp-` is the cloud prefix, exactly as `aws-` and `azure-` are below: the
+        # credential trio belongs to Google rather than to this one target, and a
+        # second Google target would share it unchanged. Terragrunt is only the first
+        # target that needs it because it is the only one that talks to GCP today.
+        "terragrunt": ("terragrunt-", "gcp-"),
         # `vault-` is HashiCorp Vault, and it is deliberately NOT `ansible-vault-`: that
         # prefix already means ansible-vault, the file-encryption tool, and
         # `ansible-vault-password` sits three lines away from it in the same input list.
@@ -87,6 +115,13 @@ def test_target_specific_inputs_are_named_for_their_target():
         # prefix rule; collapsing them into one prefix would be worse than the exception.
         "ansible": ("ansible-", "vault-"),
         "cloudflare-workers": ("cloudflare-", "artifact-"),
+        "cloudflare-docs": ("cloudflare-", "pages-"),
+        # `azure-` is the cloud prefix, exactly as `aws-` is: the credential trio belongs to
+        # the cloud rather than to this one target, and a second Azure target would share it
+        # unchanged. `functions-` is the target's own.
+        "azure-functions-zip": ("functions-", "azure-", "artifact-"),
+        # `apim-` is the target's own, as `functions-` is the other Azure target's.
+        "azure-apim-policy": ("apim-", "azure-", "artifact-"),
     }
     data = json.loads(MAP.read_text())["inputs"]
     wrong = []

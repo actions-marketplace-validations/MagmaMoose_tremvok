@@ -36,9 +36,72 @@ auth error.
 
 ### `Tremvok skipped: no AWS credential is available for target: <target>`
 
-Only the three AWS targets raise this. Set `aws-role-to-assume`, or configure credentials in an
-earlier step. `github-pages`, `cloudflare-workers` and `ansible` never see it: they publish
-somewhere else, so demanding an AWS credential would skip a run that never needed one.
+Only `s3-cloudfront` and `lambda-zip` raise this, the two targets that call AWS themselves. Set
+`aws-role-to-assume`, or configure credentials in an earlier step.
+
+No other target sees it. `github-pages`, `cloudflare-workers` and `ansible` publish somewhere
+else, and `terragrunt` takes its credentials from the backend and provider blocks in your own
+configuration, which may name AWS, Azure, GCP, a private cloud, or several in one run. Skipping
+any of them for a missing AWS credential skips a run that never needed one. If a terragrunt run
+does need AWS and has none, terragrunt fails in the provider with a message naming it, which is
+the more useful error. Before this was fixed, a terragrunt run with no `aws-role-to-assume` was
+skipped outright: every terragrunt step is gated on this skip, so the target quietly did
+nothing.
+
+### `could not configure AzureCli Authorizer: ... Please run 'az login'` during a terragrunt plan
+
+Or `exec: "az": executable file not found in $PATH`, which is the same problem on a runner
+without the CLI installed.
+
+The state backend has a credential and the **provider** does not. They are different
+credentials from different chains: `terragrunt-stack-env` supplies the first, which is why
+`init` reads and writes state perfectly well and the failure only arrives once the plan
+reaches `provider "azurerm"`. An `ARM_ACCESS_KEY` opens one storage account; it cannot
+configure a provider.
+
+Set `azure-client-id`, `azure-tenant-id` and `azure-subscription-id` — the action signs in
+with this run's OIDC token before the first plan. Or run `azure/login` in an earlier step, or
+hand the stacks `ARM_CLIENT_ID` and a secret through `terragrunt-stack-env`. See
+[Setup](setup.md#credentials-for-the-providers-which-are-not-the-state-backends).
+
+### `N stack(s) declare a provider with no credential on this runner`
+
+`terragrunt-credential-preflight` caught the failure above before the first plan rather than
+twenty stacks into it. The summary names the cloud, the stacks and the fix.
+
+If it is wrong — the credential is there and the check cannot see it — the useful question is
+*how* the provider authenticates. A provider block that configures its own authentication is
+not checked at all, so a stack reading `client_id` from a variable is already exempt. What is
+left is a chain this action does not know about, and `terragrunt-credential-preflight: warn`
+is the escape hatch; `off` turns it off entirely. Both are worth a moment's thought first: the
+error it replaces costs a full plan cycle across every stack to say less.
+
+### `Google STS refused the OIDC token for <provider>`
+
+The federation itself, not the permissions. The pool provider's issuer URI or its attribute
+condition does not match this run. Check the issuer is the one your enterprise actually mints
+tokens from (on GitHub Enterprise Cloud with data residency that is
+`https://token.actions.<subdomain>.ghe.com`, not `token.actions.githubusercontent.com`), and
+that the attribute condition allows this repository and ref. The message carries Google's own
+`error_description` when there is one.
+
+### `the federated identity may not impersonate <service account>`
+
+The opposite half: the pool accepted the token and the service account will not be
+impersonated. Grant the pool's `principalSet` `roles/iam.workloadIdentityUser` on that service
+account. Or drop `gcp-service-account` entirely and bind the roles to the principalSet, which
+is one fewer indirection.
+
+### `gcp-workload-identity-provider must be the provider's full resource name`
+
+A pool is not a provider. It is
+`projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>` — the
+project **number**, not its id. Refused before any call, because Google answers a pool name
+with a 400 about an invalid audience that names neither the pool nor the provider.
+
+### `terragrunt-credential-preflight must be auto, warn or off`
+
+It is an enum, not a boolean. `true` and `false` are refused rather than read as one of them.
 
 ### `role-to-assume is set but this job cannot mint an OIDC token`
 
@@ -123,6 +186,22 @@ to the default branch both say true.
 
 If a push also staged nothing, check the job summary for a skip: a fork pull request and an
 unwired repository both report one with a reason.
+
+### `gen-docs-agents: site_name '<name>' gives no Agent Skills name`
+
+The skill is named after `site_name`, lowercased, with every run of anything but letters and
+digits turned into one hyphen, and a `site_name` with no Latin letter or digit in it leaves
+nothing to name it by. Set `extra.agents.skill.name` to a name of `a-z`, `0-9` and single
+hyphens. The rest of the agent-readiness step still runs; only the skill is left out.
+
+### The published site has no `/.well-known/agent-skills/index.json`
+
+Check that the step ran (`pages-agent-ready`, on by default) and that the site does not already
+publish its own `/.well-known/agent-skills/`, which the step keeps whole. On `github-pages` the
+Pages artifact includes dot-directories only while `pages-agent-ready` is on, because
+`actions/upload-pages-artifact` leaves them out otherwise. On a host shared through the docs
+router, a site's skill appears in the host's root index within five minutes of its deploy, the
+time the router keeps what it last read from each site.
 
 ## `target: s3-cloudfront` and `target: lambda-zip`
 
@@ -231,8 +310,9 @@ Order decides it: the first matching line wins for a given key, so a `*` catch-a
 
 ### `<n> stack(s) failed to plan`
 
-The pull-request comment carries a redacted excerpt per stack. Nothing applies while any stack
-fails to plan, approval or not.
+The pull-request comment carries a redacted excerpt for each stack that changed or failed, sized
+so the whole comment fits GitHub's limit; the workflow run has every plan in full. Nothing
+applies while any stack fails to plan, approval or not.
 
 ### `<actor> is not in terragrunt-apply-operators, so cannot force an apply`
 
@@ -245,6 +325,23 @@ strength of a flag. The normal path is an independent pull-request approval and 
 That's the intended state for a pull request with pending changes. It turns green once the stacks
 are applied, which is what makes apply-before-merge enforceable. Get an independent approval:
 approving applies the stacks.
+
+### The check run says `Approved, but not applied for this commit`
+
+The pull request carries an independent approval, but this run was not started by it, so it
+planned and reported instead of applying. An approval applies the commit it was given for: the
+usual way to see this is an approval on one commit followed by a push of another, where
+applying the new one would apply a commit nobody reviewed.
+
+Dismiss the approval and re-approve to apply the commit in front of you. If the workflow has no
+`pull_request_review` trigger, add one (`types: [submitted, dismissed]`) or nothing will ever
+apply. `terragrunt-apply: force` applies by hand for an actor named in
+`terragrunt-apply-operators`.
+
+The same state appears when the run was triggered by a review that is a comment or a change
+request rather than an approval, and on a `workflow_dispatch` that names a pull request with
+`terragrunt-pull-request`: dispatching a workflow is not approving a commit, so that path plans
+and `terragrunt-apply: force` is its apply.
 
 ### `could not read the reviews of #<n>`
 
@@ -352,6 +449,26 @@ the reviewed plan or nothing, re-run the whole job so plan and apply are adjacen
 Discovery maps changed files to stacks by path, and a change under `modules/` maps to nothing on
 purpose: a module has no state of its own. Guessing which stacks use it is how a small module
 tidy-up ends up planning the whole estate. `terragrunt-scope: all` plans everything.
+
+### The check run says `No Terraform stacks affected` and the change was Terraform
+
+Check where the changed file sits. A file inside a stack maps to that stack; a file above the
+stacks maps to every stack beneath its own directory; a file under `modules/` or outside
+`terragrunt-root` maps to nothing. [Which stacks a change
+plans](setup.md#which-stacks-a-change-plans) is the whole table.
+
+Until this was fixed, only the first of those worked: a shared `root.hcl` has no enclosing
+stack, so it mapped to nothing and the run published `No Terraform stacks affected` as a
+success. The pull request merged green with every stack that includes that root unplanned. If
+you are pinned to a release from before the fix, that is what you are seeing, and
+`terragrunt-scope: all` is the workaround.
+
+### A shared root plans more stacks than you expected
+
+Working as intended. Every stack beneath a shared `root.hcl` includes it through
+`find_in_parent_folders`, so changing it changes all of them, and a file directly in
+`terragrunt-root` reaches every stack in the estate. Move the change lower if it should not
+have that reach, or split the root.
 
 ## `target: ansible`
 

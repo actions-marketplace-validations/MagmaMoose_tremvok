@@ -69,7 +69,7 @@ STUBEOF
 @test "an empty input probes nothing and exits 0, so every existing caller is unaffected" {
   PREFLIGHT_URLS='' run bash "${SCRIPTS}/preflight-urls.sh"
   [ "$status" -eq 0 ]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "blank lines and # comments are ignored rather than probed as URLs" {
@@ -82,7 +82,7 @@ STUBEOF
 @test "a block scalar holding only comments probes nothing rather than failing on an empty list" {
   PREFLIGHT_URLS=$'# nothing yet\n' run bash "${SCRIPTS}/preflight-urls.sh"
   [ "$status" -eq 0 ]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "every endpoint is probed even when the first is unreachable, so one run names them all instead of one per attempt" {
@@ -120,14 +120,14 @@ STUBEOF
     run bash "${SCRIPTS}/preflight-urls.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"unlimited"* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "a non-numeric PROBE_TIMEOUT is refused rather than passed to curl" {
   PROBE_TIMEOUT=8s PREFLIGHT_URLS='https://state.example.com/' \
     run bash "${SCRIPTS}/preflight-urls.sh"
   [ "$status" -ne 0 ]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "a line that is not an http(s) URL is refused before any request, because curl would guess a scheme and probe something else" {
@@ -138,7 +138,7 @@ STUBEOF
   [[ "$output" == *"line 2 is not an http(s) URL"* ]]
   [[ "$output" == *"no scheme at all"* ]]
   [[ "$output" != *"state.example.com"* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "the password in a credential-bearing preflight URL never reaches the log or the step summary, because the guard that refuses it must not be the thing that publishes it" {
@@ -160,7 +160,7 @@ STUBEOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"credentials in the URL"* ]]
   [[ "$output" != *"FAKETKN456"* ]]
-  ! grep -q '^curl' "$STUB_LOG"
+  refute grep -q '^curl' "$STUB_LOG"
 }
 
 @test "the egress IP is printed only when something is unreachable, so a clean run makes no third-party call the caller did not ask for" {

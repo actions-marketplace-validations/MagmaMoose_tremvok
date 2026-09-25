@@ -7,23 +7,43 @@ name: Docs
 # would test the last release instead, which is the one thing a dogfood workflow must
 # not do.
 #
-# Consumers CAN copy this file: it is the shape every GitHub Pages caller needs, because a
-# composite action cannot declare `pages: write` or the `github-pages` environment. That is
-# the only job Tremvok hands back to its caller. See docs/setup.md.
+# PUBLISHES TO WORKERS STATIC ASSETS, NOT GITHUB PAGES (ADR-0005). The canonical address is
+# docs.magmamoose.com/tremvok/, served by the router Worker in workers/docs-router/ over a
+# service binding to the `docs-tremvok` Worker this deploys. Consumers can copy this file:
+# unlike the GitHub Pages shape it replaces, there is no second job, because a composite
+# action can run Wrangler itself — `pages: write` and the `github-pages` environment were the
+# only reasons that job had to live in the caller's workflow.
+#
+# ORDERING: this cannot publish until the router Worker exists and CLOUDFLARE_API_TOKEN /
+# CLOUDFLARE_ACCOUNT_ID are set as repository secrets. Until then a push to main fails here
+# rather than publishing to the wrong place, which is the intended direction to fail in.
 
+# `mkdocs.base.yml` is in both lists because Caldrith commits it straight to main when the
+# fleet base changes in MagmaMoose/admin. Without it that commit, which is how the brand and
+# the `extra.seo` defaults arrive, would reach this site only on the next unrelated docs edit.
+# The generators and the WebMCP script are here because they write into the site this workflow
+# publishes.
 on:
   push:
     branches: [main]
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
+      - 'mkdocs.base.yml'
+      - 'wrangler.toml'
       - 'action.yml'
+      - 'scripts/gen_docs_*.py'
+      - 'scripts/docs_webmcp.js'
       - '.github/workflows/docs-site.yml'
   pull_request:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
+      - 'mkdocs.base.yml'
+      - 'wrangler.toml'
       - 'action.yml'
+      - 'scripts/gen_docs_*.py'
+      - 'scripts/docs_webmcp.js'
       - '.github/workflows/docs-site.yml'
   workflow_dispatch:
 
@@ -31,34 +51,35 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: docs
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build site
+  docs:
+    name: Build and publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./
         with:
-          target: github-pages
+          target: cloudflare-docs
           checkout: 'false'
-          # On a pull request `mode: auto` resolves to preview, and GitHub Pages has no
-          # preview destination, so nothing is staged and the build itself is the check.
-          # That is why this target needs no destination input of its own.
-
-  deploy:
-    name: Deploy to Pages
-    needs: build
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+          # On a pull request `mode: auto` resolves to preview, and these Workers have
+          # `workers_dev = false` and no route — so there is no disposable destination to
+          # publish a preview to, and the strict build is the check. Same position
+          # `github-pages` is in, for a different reason.
+          cloudflare-docs-host: docs.magmamoose.com
+          # Tremvok's own docs belong in the corpus the rest of the fleet publishes to.
+          # This input defaults to empty, which publishes no index — so the repository that
+          # SHIPS index publishing was the one repository already on this target and
+          # contributing no documents to it. `list_docs` on mcp.magmamoose.com counted
+          # tremvok among the repositories with nothing published.
+          cloudflare-docs-index-bucket: magmamoose-docs-index
+          # `cloudflare-docs-path` defaults to the repository name, which is what the router
+          # dispatches on, so it is left unset rather than restated here.
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Tremvok's own docs are public, so there is no Access application to require. A
+          # private site sets this true and the deploy refuses unless one actually covers
+          # docs.magmamoose.com/<repo>.
+          cloudflare-docs-require-access: 'false'

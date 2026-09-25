@@ -35,7 +35,7 @@ jobs:
     runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
 
@@ -77,12 +77,50 @@ jobs:
       - name: bats
         run: bats tests/bats
 
+  workers:
+    name: Workers (wrangler dry-run)
+    runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      # The pool's images are minimal and may ship no Node at all, so it is installed rather
+      # than assumed. Wrangler 4 declares `engines.node >= 22` and on 20 it installs cleanly
+      # and then refuses to run.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - run: uv sync --all-groups --frozen
+
+      - name: Every wrangler binding is real
+        # A binding is only real if `wrangler deploy --dry-run` prints it. The rate-limit
+        # block takes `name` where every other binding takes `binding`, and a config that
+        # gets it wrong deploys a Worker that throws on its first request.
+        #
+        # TREMVOK_REQUIRE_WRANGLER turns a skip into a failure. Without it, a runner image
+        # with no Node would make this job pass while verifying nothing — a required check
+        # that never reports, which this repository has been bitten by before.
+        env:
+          TREMVOK_REQUIRE_WRANGLER: '1'
+        run: uv run pytest tests/test_workers_bindings.py -q
+
+      - name: The docs router's behaviour, and the WebMCP script every docs site gets
+        # The router's own node:test suite, plus the llms.txt layout it reads from every site,
+        # and the suite for scripts/docs_webmcp.js, run through pytest so a contributor runs the
+        # same thing with `uv run pytest`. TREMVOK_REQUIRE_NODE turns the local "no Node" skip
+        # into a failure, for the same reason TREMVOK_REQUIRE_WRANGLER does above.
+        env:
+          TREMVOK_REQUIRE_NODE: '1'
+        run: uv run pytest tests/test_docs_router.py tests/test_docs_webmcp.py -q
+
   api:
     name: API (ruff + mypy + pytest)
     runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
 
@@ -166,7 +204,7 @@ jobs:
     # environment variables the same way.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2

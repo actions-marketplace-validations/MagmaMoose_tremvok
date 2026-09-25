@@ -52,7 +52,7 @@ STUBEOF
   INIT_EXIT=1 run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
   [ "$status" -ne 0 ]
   [ "$(cat out/status)" = "failed" ]
-  ! grep -q 'terragrunt plan' "$STUB_LOG"
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
 }
 
 @test "the plan uses -detailed-exitcode, or none of the above can be told apart" {
@@ -95,7 +95,7 @@ STUBEOF
   [ "$(cat out/status)" = "applied" ]
   [[ "$output" == *"PLAN SOURCE: the saved plan"* ]]
   grep -q 'terragrunt apply .*plan.tfplan' "$STUB_LOG"
-  ! grep -q 'terragrunt plan' "$STUB_LOG"
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
 }
 
 @test "a saved plan from the plan run is found through PLAN_DIR" {
@@ -122,7 +122,7 @@ STUBEOF
   APPLY_EXIT=1 run bash "${SCRIPTS}/terragrunt-run.sh" apply stack out
   [ "$status" -ne 0 ]
   [ "$(cat out/status)" = "failed" ]
-  ! grep -q 'terragrunt plan' "$STUB_LOG"
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
 }
 
 @test "a pull request plans without a provider refresh; a scheduled run refreshes" {
@@ -130,12 +130,12 @@ STUBEOF
   grep -q -- '-refresh=false' "$STUB_LOG"
   : >"$STUB_LOG"
   EVENT_NAME=schedule run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
-  ! grep -q -- '-refresh=false' "$STUB_LOG"
+  refute grep -q -- '-refresh=false' "$STUB_LOG"
 }
 
 @test "refresh can be forced on for a pull request" {
   TG_REFRESH=true EVENT_NAME=pull_request run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
-  ! grep -q -- '-refresh=false' "$STUB_LOG"
+  refute grep -q -- '-refresh=false' "$STUB_LOG"
 }
 
 @test "a failed apply is recorded as failed" {

@@ -11,6 +11,12 @@
 #                          sticky pull-request comment
 #   workflow_dispatch   -> a manual re-publish of production, pinned to the default branch
 #
+# Before either publishes, `cloudflare-verify-config` (on by default) runs `wrangler deploy
+# --dry-run` and refuses to publish if Wrangler reports configuration it will not apply. A
+# Worker whose bindings reach data an unreviewed branch must not run against should set
+# `dry-run: ${{ github.event_name == 'pull_request' }}` instead of taking a preview: on this
+# target that is Wrangler's own dry run, and it needs no credentials.
+#
 # Two secrets and nothing else. Mint CLOUDFLARE_API_TOKEN from Cloudflare's "Edit Cloudflare
 # Workers" template rather than a hand-picked permission list, or the first deploy of a
 # custom domain fails on a permission nobody thought to grant. Both are fine as organisation

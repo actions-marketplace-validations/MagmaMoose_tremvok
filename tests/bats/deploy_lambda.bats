@@ -59,7 +59,7 @@ STUBEOF
     run bash "${SCRIPTS}/deploy-lambda-zip.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"immutable"* ]]
-  ! grep -q "put-object" "$STUB_LOG"
+  refute grep -q "put-object" "$STUB_LOG"
 }
 
 @test "an existing key with identical bytes is an idempotent re-run" {

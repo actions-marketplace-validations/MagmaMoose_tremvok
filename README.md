@@ -8,10 +8,9 @@
 > **Ship it, prove it went live.**
 
 One GitHub Action for the whole deploy side: documentation sites, static sites on
-S3/CloudFront, Cloudflare Workers, Lambda packages, Terragrunt stacks and fleets over
-Ansible. Pick a target,
-pass that target's inputs, and Tremvok deploys it, verifies it actually serves, and tells
-the humans. It is the counterpart to
+S3/CloudFront, Cloudflare Workers, Azure Functions, Lambda packages, Terragrunt stacks and
+fleets over Ansible. Pick a target, pass that target's inputs, and Tremvok deploys it,
+verifies it actually serves, and tells the humans. It is the counterpart to
 [Diatreme](https://github.com/MagmaMoose/diatreme): Diatreme decides *what version and
 whether it is released*, Tremvok gets it *live and confirms it*.
 
@@ -56,15 +55,18 @@ Swap `target:` and its inputs for another target. Ready-to-copy workflows for ea
 
 ## What it does
 
-- **Six targets, one action**: `github-pages`, `cloudflare-workers`, `s3-cloudfront`,
-  `lambda-zip`, `terragrunt`, `ansible`. `target` is the only required input.
+- **Nine targets, one action**: `github-pages`, `cloudflare-docs`, `cloudflare-workers`,
+  `azure-functions-zip`, `azure-apim-policy`, `s3-cloudfront`, `lambda-zip`, `terragrunt`,
+  `ansible`. `target` is the only required input.
 - **Every input is checked against the target.** An input belonging to another target is a
   hard error naming both, before the checkout, never a silent no-op. That is what stops a
   target enum from becoming a listing that cannot say what it does.
 - **Verifies rather than assumes.** A deploy platform reports success once it *accepts* an
   artifact, which is not the site answering. Tremvok requests the URL, checks the status and
   a response header, and retries. Ansible goes further: a second check-mode run has to find
-  nothing left to change, because a zero exit only proves the playbook ran.
+  nothing left to change, because a zero exit only proves the playbook ran. On Azure the exit
+  code actively lies — `az` reports `Bad Request` over deploys that worked, and a Function App
+  reports `Running` while serving 503 — so only an answer from the app counts.
 - **Applies the plan that was reviewed.** The Terragrunt target plans, saves the plan, gates
   on an independent pull-request approval, then applies that saved plan, and publishes a
   check run you can make required, which turns apply-before-merge into a rule.
@@ -77,15 +79,16 @@ Swap `target:` and its inputs for another target. Ready-to-copy workflows for ea
 
 | Input | Applies to | What it does |
 | --- | --- | --- |
-| `target` | — | `github-pages` · `cloudflare-workers` · `s3-cloudfront` · `lambda-zip` · `terragrunt` · `ansible`. Required. |
+| `target` | — | `github-pages` · `cloudflare-docs` · `cloudflare-workers` · `azure-functions-zip` · `azure-apim-policy` · `s3-cloudfront` · `lambda-zip` · `terragrunt` · `ansible`. Required. |
 | `mode` | all | `auto` (default) reads the event: push = deploy, pull request = preview. |
-| `artifact-path` | s3, lambda, cloudflare | The built artifact. A directory, or a `.zip`. |
+| `artifact-path` | s3, lambda, cloudflare, functions | The built artifact. A directory, or a `.zip`. |
 | `aws-role-to-assume` | the AWS targets | Role assumed with this run's OIDC token. |
 | `verify-url` | all | Requested after the deploy; a non-2xx fails the run. |
 | `cloudflare-api-token` | cloudflare-workers | Wrangler's credential. Pass a secret. |
+| `functions-app-name`, `apim-api-id` | the Azure targets | The Function App, or the API Management API. `azure-client-id` signs in by OIDC. |
 | `ansible-playbook` | ansible | Playbook to run. `ansible-inventory` goes with it. |
 
-All 87 inputs, and the permissions each target needs →
+All 125 inputs, and the permissions each target needs →
 **[Action reference](https://magmamoose.github.io/tremvok/action-reference/)**
 
 ## The one job Tremvok hands back

@@ -1,0 +1,68 @@
+# docs.magmamoose.com — deploy the router.
+#
+# The router owns the hostname and dispatches `/<repo>/…` to that repository's own docs
+# Worker over a service binding (workers/docs-router/). Until this workflow existed,
+# deploying it was "a separate, human act" (.claude/decisions/0004) — which was fine while it
+# had never been deployed at all, and stops being fine the moment the fleet's routing table
+# is a file people edit: ADDING A REPOSITORY TO THE FLEET'S DOCS IS ADDING A `[[services]]`
+# BLOCK AND REDEPLOYING, and a redeploy nothing performs is a repository whose docs 404 with
+# a green build everywhere.
+#
+# THIS DOES NOT SETTLE WHO OWNS THE ROUTER. Open question 1 in 0004 is whether it belongs
+# here or in MagmaMoose/admin; if it moves, this file moves with it and nothing else changes.
+#
+# A PULL REQUEST IS A DRY RUN, NEVER A PREVIEW. Preview mode uploads a version with
+# `--preview-alias`, which needs a workers.dev subdomain to serve it on, and `workers_dev =
+# false` is the invariant the whole service-binding design rests on. Same position the site
+# Workers are in, and the same answer: the dry run is the check.
+#
+# EXPECT THIS TO FAIL LOUDLY WHEN THE TABLE RUNS AHEAD OF REALITY. A `[[services]]` binding
+# naming a Worker that has not published yet is refused by the API for the whole script
+# (`code: 10143`), not degraded to a dead route — so a repo must have deployed its own docs
+# site before its binding lands here.
+name: Docs router
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/docs-router/**'
+      - '.github/workflows/docs-router.yml'
+  pull_request:
+    paths:
+      - 'workers/docs-router/**'
+      - '.github/workflows/docs-router.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-router
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy the router
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      # Before anything publishes. The router answers for every docs site on the host, so a
+      # broken one is every site down at once; this is the one gate that stands between a
+      # merge and that, whatever CI said about the pull request.
+      - name: The router's own tests
+        run: node --test workers/docs-router/test/router.test.mjs
+      - uses: ./
+        with:
+          target: cloudflare-workers
+          checkout: 'false'
+          # Only `main` publishes. A manual run from a branch is validated against the
+          # production config and deploys nothing.
+          dry-run: ${{ github.ref != 'refs/heads/main' }}
+          cloudflare-config: workers/docs-router/wrangler.toml
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          pr-comment: 'false'

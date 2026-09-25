@@ -89,7 +89,7 @@ STUBEOF
   PR_NUMBER=42 BODY="hello" run bash "${SCRIPTS}/notify-pr.sh"
   [ "$status" -eq 0 ]
   grep -q -- "--request POST" "$STUB_LOG"
-  ! grep -q -- "--request PATCH" "$STUB_LOG"
+  refute grep -q -- "--request PATCH" "$STUB_LOG"
 }
 
 @test "a second run edits the existing comment in place" {
@@ -104,7 +104,7 @@ STUBEOF
   PR_NUMBER=42 BODY="new" run bash "${SCRIPTS}/notify-pr.sh"
   [ "$status" -eq 0 ]
   grep -q "issues/comments/99" "$STUB_LOG"
-  ! grep -q -- "--request POST" "$STUB_LOG"
+  refute grep -q -- "--request POST" "$STUB_LOG"
 }
 
 @test "different comment keys do not collide" {
@@ -132,4 +132,46 @@ STUBEOF
   PR_NUMBER=42 BODY=x run bash "${SCRIPTS}/notify-pr.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"::warning::"* ]]
+}
+
+# A 200 KB body: GitHub's limit is 65,536 characters, and a single argument is capped at 128 KiB.
+# Handed over as BODY_FILE, the way deploy-terragrunt.sh hands over a plan. Linux caps any one
+# environment string at 128 KiB too (MAX_ARG_STRLEN), so BODY=<200 KB> fails execve with E2BIG
+# before notify-pr.sh runs: the test passed on macOS, which has no per-string cap, and failed CI.
+@test "an oversized body is sent from a file and cut to fit" {
+  stub_script curl <<'STUBEOF'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >>"${STUB_LOG}"
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--data-binary" ]; then cp "${arg#@}" "${WORK}/request.json"; fi
+  prev="$arg"
+done
+case "$*" in
+  *"--request POST"*) printf '{"id":1}' ;;
+  *) printf '[]' ;;
+esac
+STUBEOF
+  printf '%200000s' | tr ' ' x >"${WORK}/body.md"
+  BODY_FILE="${WORK}/body.md" PR_NUMBER=42 run bash "${SCRIPTS}/notify-pr.sh"
+  [ "$status" -eq 0 ]
+  grep -q -- "--request POST" "$STUB_LOG"
+  # No argument carried the body.
+  [ "$(awk '{ print length }' "$STUB_LOG" | sort -n | tail -1)" -lt 2000 ]
+  [ "$(jq -r '.body | length' "${WORK}/request.json")" -le 65000 ]
+  jq -r '.body' "${WORK}/request.json" | grep -q "Cut short to fit GitHub's comment size limit"
+}
+
+@test "a refused post is a warning, not a false success" {
+  stub_script curl <<'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+  *"--request POST"*) exit 22 ;;
+  *) printf '[]' ;;
+esac
+STUBEOF
+  PR_NUMBER=42 BODY=hello run bash "${SCRIPTS}/notify-pr.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not post the pull-request comment"* ]]
+  [[ "$output" != *"posted a new pull-request comment"* ]]
 }

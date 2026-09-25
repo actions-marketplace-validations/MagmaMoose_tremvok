@@ -8,6 +8,7 @@ thing that notices.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
@@ -148,3 +149,39 @@ def test_every_script_fails_closed_and_is_executable(script):
     assert "set -euo pipefail" in text, f"{script.name} does not set -euo pipefail"
     if script.name != "lib":
         assert text.startswith("#!/usr/bin/env bash"), f"{script.name} has no bash shebang"
+
+
+@pytest.mark.parametrize(
+    ("step_name", "gating_input"),
+    [
+        ("Assume the deployment role", "aws-role-to-assume"),
+        ("Sign in to Azure", "azure-client-id"),
+        ("Federate with Google Cloud", "gcp-workload-identity-provider"),
+    ],
+)
+def test_the_cloud_logins_are_gated_on_their_input_and_not_on_a_target(step_name, gating_input):
+    """The terragrunt target is provider-agnostic, and these three steps are what let it say so.
+
+    Gating one of them on `inputs.target == '<something>'` would silently drop terragrunt from
+    it, and the symptom is not a missing input — it is a plan that reads state perfectly well
+    and then dies inside a provider, once per stack, with a message naming a generated file.
+    That is the failure this parametrisation exists to keep from coming back, so the assertion
+    is on the ABSENCE of a target check rather than on the presence of the input.
+    """
+    step = next((s for s in STEPS if s.get("name") == step_name), None)
+    assert step is not None, f"the step {step_name!r} is gone; the credential path changed"
+    condition = step.get("if", "")
+    assert f"inputs.{gating_input} != ''" in condition, (
+        f"{step_name} is no longer gated on {gating_input} being set"
+    )
+    assert "inputs.target ==" not in condition, (
+        f"{step_name} is gated on a target. Every target that needs this credential now has "
+        f"to be listed there, and the one that will be forgotten is terragrunt."
+    )
+    # The applicability map has to agree, or the validator refuses the input on a target the
+    # step would happily have served.
+    targets = json.loads((SCRIPTS / "lib" / "input-targets.json").read_text())
+    assert "terragrunt" in targets["inputs"][gating_input]["targets"], (
+        f"{gating_input} does not apply to terragrunt in input-targets.json, so "
+        f"validate-inputs.sh refuses it there"
+    )

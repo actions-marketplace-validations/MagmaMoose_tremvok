@@ -1,65 +1,83 @@
 {
   "targets": [
     "github-pages",
+    "cloudflare-docs",
     "s3-cloudfront",
     "lambda-zip",
     "terragrunt",
     "ansible",
-    "cloudflare-workers"
+    "cloudflare-workers",
+    "azure-functions-zip",
+    "azure-apim-policy"
   ],
   "inputs": {
     "mode": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "auto"
     },
     "environment": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
     "working-directory": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "."
     },
     "checkout": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "true"
     },
     "dry-run": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "false"
     },
@@ -87,70 +105,137 @@
       ],
       "default": "3600"
     },
+    "azure-client-id": {
+      "targets": [
+        "terragrunt",
+        "azure-functions-zip",
+        "azure-apim-policy"
+      ],
+      "default": ""
+    },
+    "azure-tenant-id": {
+      "targets": [
+        "terragrunt",
+        "azure-functions-zip",
+        "azure-apim-policy"
+      ],
+      "default": ""
+    },
+    "azure-subscription-id": {
+      "targets": [
+        "terragrunt",
+        "azure-functions-zip",
+        "azure-apim-policy"
+      ],
+      "default": ""
+    },
+    "gcp-workload-identity-provider": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": ""
+    },
+    "gcp-service-account": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": ""
+    },
+    "gcp-project-id": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": ""
+    },
     "pages-toolchain": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "auto"
     },
     "pages-dependency-group": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "docs"
     },
     "pages-requirements": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "docs/requirements.txt"
     },
     "pages-python-version": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "3.12"
     },
     "pages-strict": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "true"
     },
     "pages-site-dir": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "site"
     },
     "pages-lint": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "true"
     },
     "pages-profile": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "auto"
     },
     "pages-readme-budget": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "0"
     },
     "pages-markdownlint": {
       "targets": [
-        "github-pages"
+        "github-pages",
+        "cloudflare-docs"
+      ],
+      "default": "true"
+    },
+    "pages-seo": {
+      "targets": [
+        "github-pages",
+        "cloudflare-docs"
+      ],
+      "default": "true"
+    },
+    "pages-agent-ready": {
+      "targets": [
+        "github-pages",
+        "cloudflare-docs"
       ],
       "default": "true"
     },
     "build-git-credentials": {
       "targets": [
         "github-pages",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": ""
     },
@@ -158,7 +243,9 @@
       "targets": [
         "s3-cloudfront",
         "lambda-zip",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
@@ -307,6 +394,12 @@
         "terragrunt"
       ],
       "default": ""
+    },
+    "terragrunt-credential-preflight": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": "auto"
     },
     "terragrunt-log-level": {
       "targets": [
@@ -466,25 +559,29 @@
     },
     "cloudflare-api-token": {
       "targets": [
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": ""
     },
     "cloudflare-account-id": {
       "targets": [
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": ""
     },
     "cloudflare-config": {
       "targets": [
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": ""
     },
     "cloudflare-worker-name": {
       "targets": [
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": ""
     },
@@ -526,15 +623,53 @@
     },
     "cloudflare-wrangler-version": {
       "targets": [
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": "4.114.0"
     },
     "cloudflare-node-version": {
       "targets": [
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "cloudflare-docs"
       ],
       "default": "24"
+    },
+    "cloudflare-docs-host": {
+      "targets": [
+        "cloudflare-docs"
+      ],
+      "default": ""
+    },
+    "cloudflare-docs-path": {
+      "targets": [
+        "cloudflare-docs"
+      ],
+      "default": ""
+    },
+    "cloudflare-docs-require-access": {
+      "targets": [
+        "cloudflare-docs"
+      ],
+      "default": "false"
+    },
+    "cloudflare-docs-index": {
+      "targets": [
+        "cloudflare-docs"
+      ],
+      "default": "true"
+    },
+    "cloudflare-docs-index-bucket": {
+      "targets": [
+        "cloudflare-docs"
+      ],
+      "default": ""
+    },
+    "cloudflare-docs-capability-file": {
+      "targets": [
+        "cloudflare-docs"
+      ],
+      "default": "capability.json"
     },
     "cloudflare-extra-args": {
       "targets": [
@@ -542,168 +677,287 @@
       ],
       "default": ""
     },
+    "cloudflare-verify-config": {
+      "targets": [
+        "cloudflare-workers"
+      ],
+      "default": "true"
+    },
+    "functions-app-name": {
+      "targets": [
+        "azure-functions-zip"
+      ],
+      "default": ""
+    },
+    "functions-resource-group": {
+      "targets": [
+        "azure-functions-zip"
+      ],
+      "default": ""
+    },
+    "functions-slot": {
+      "targets": [
+        "azure-functions-zip"
+      ],
+      "default": ""
+    },
+    "functions-ready-attempts": {
+      "targets": [
+        "azure-functions-zip"
+      ],
+      "default": "30"
+    },
+    "functions-ready-delay": {
+      "targets": [
+        "azure-functions-zip"
+      ],
+      "default": "10"
+    },
+    "apim-service-name": {
+      "targets": [
+        "azure-apim-policy"
+      ],
+      "default": ""
+    },
+    "apim-resource-group": {
+      "targets": [
+        "azure-apim-policy"
+      ],
+      "default": ""
+    },
+    "apim-api-id": {
+      "targets": [
+        "azure-apim-policy"
+      ],
+      "default": ""
+    },
+    "apim-policy-format": {
+      "targets": [
+        "azure-apim-policy"
+      ],
+      "default": "rawxml"
+    },
     "verify-url": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
     "verify-header": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
     "verify-header-match": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
+    },
+    "verify-method": {
+      "targets": [
+        "github-pages",
+        "cloudflare-docs",
+        "s3-cloudfront",
+        "lambda-zip",
+        "terragrunt",
+        "ansible",
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
+      ],
+      "default": "GET"
     },
     "verify-status": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "200"
     },
     "verify-attempts": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "6"
     },
     "verify-delay": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "10"
     },
     "notify": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "always"
     },
     "pr-comment": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "auto"
     },
     "slack-webhook": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
     "teams-webhook": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
     "api-url": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": ""
     },
     "api-audience": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "tremvok"
     },
     "auth-token": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "${{ github.token }}"
     },
     "allow-fork-preview": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "false"
     },
     "allow-dispatch-from-any-ref": {
       "targets": [
         "github-pages",
+        "cloudflare-docs",
         "s3-cloudfront",
         "lambda-zip",
         "terragrunt",
         "ansible",
-        "cloudflare-workers"
+        "cloudflare-workers",
+        "azure-functions-zip",
+        "azure-apim-policy"
       ],
       "default": "false"
     }

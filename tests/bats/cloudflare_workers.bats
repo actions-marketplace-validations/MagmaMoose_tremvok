@@ -17,6 +17,11 @@ setup() {
   export CLOUDFLARE_API_TOKEN=cf-token-value
   export CLOUDFLARE_ACCOUNT_ID=0123456789abcdef
 
+  # Off by default HERE, not in the action: most tests below assert on the exact argv of the
+  # publish invocation, and the verifying dry run is a second invocation in front of it. The
+  # tests that are about verification turn it on and assert on both calls.
+  export VERIFY_CONFIG=false
+
   export ASSETS="${WORK}/dist"
   mkdir -p "$ASSETS"
   printf '<html></html>' >"${ASSETS}/index.html"
@@ -34,6 +39,20 @@ printf 'wrangler %s\n' "$*" >>"${STUB_LOG}"
 # `argv_count`/`argv_at` below able to see them.
 { printf '%s\n' "$#"; printf '%s\n' "$@"; } >>"${STUB_LOG}.argv"
 case "$*" in
+  *"--dry-run"*)
+    # Shaped like Wrangler 4.114.0 and 4.127.1, colour codes and all. Wrangler colours its
+    # warnings even when piped, and the step echoes the offending lines into the job log, so
+    # they have to come out of it readable rather than as escape sequences.
+    if [[ -n "${WRANGLER_DRY_RUN_WARNING:-}" ]]; then
+      printf '\033[33m▲ \033[43;33m[\033[43;30mWARNING\033[43;33m]\033[0m \033[1mProcessing wrangler.toml configuration:\033[0m\n'
+      printf '    - \033[2m%s\033[0m\n' "${WRANGLER_DRY_RUN_WARNING}"
+    fi
+    printf 'Your Worker has access to the following bindings:\n'
+    printf 'Binding                        Resource\n'
+    printf 'env.BURST (4 requests/10s)     Rate Limit\n'
+    printf '--dry-run: exiting now.\n'
+    exit "${WRANGLER_DRY_RUN_EXIT:-0}"
+    ;;
   *"versions upload"*)
     printf 'Total Upload: 12.34 KiB / gzip: 4.56 KiB\n'
     printf 'Uploaded tremvok-site (2.34 sec)\n'
@@ -96,7 +115,7 @@ argv_last() { tail -n +2 "${STUB_LOG}.argv" | tail -1; }
   # be; without this one, an alias leaking into a production deploy goes unnoticed.
   MODE=deploy PREVIEW_ALIAS=pr-9 run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
   [ "$status" -eq 0 ]
-  ! grep -q -- '--preview-alias' "$STUB_LOG"
+  refute grep -q -- '--preview-alias' "$STUB_LOG"
 }
 
 @test "extra args reach Wrangler, before the entry point" {
@@ -123,7 +142,7 @@ argv_last() { tail -n +2 "${STUB_LOG}.argv" | tail -1; }
   MODE=deploy run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
   [ "$status" -eq 0 ]
   grep -qE '^wrangler deploy( |$)' "$STUB_LOG"
-  ! grep -q 'versions upload' "$STUB_LOG"
+  refute grep -q 'versions upload' "$STUB_LOG"
 }
 
 @test "a pull request uploads an aliased version and never touches production routes" {
@@ -132,7 +151,7 @@ argv_last() { tail -n +2 "${STUB_LOG}.argv" | tail -1; }
   MODE=preview PREVIEW_ALIAS=pr-1 run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
   [ "$status" -eq 0 ]
   grep -q -- 'versions upload --preview-alias pr-1' "$STUB_LOG"
-  ! grep -qE '^wrangler deploy( |$)' "$STUB_LOG"
+  refute grep -qE '^wrangler deploy( |$)' "$STUB_LOG"
 }
 
 @test "a preview without an alias is refused rather than uploaded unaliased" {
@@ -166,7 +185,7 @@ argv_last() { tail -n +2 "${STUB_LOG}.argv" | tail -1; }
 @test "minify off means the flag is absent, not passed as false" {
   MODE=deploy MINIFY=false run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
   [ "$status" -eq 0 ]
-  ! grep -q -- '--minify' "$STUB_LOG"
+  refute grep -q -- '--minify' "$STUB_LOG"
 }
 
 @test "each line of cloudflare-vars becomes its own --var" {
@@ -261,7 +280,7 @@ argv_last() { tail -n +2 "${STUB_LOG}.argv" | tail -1; }
   stub tremvok-build 1 ''
   MODE=deploy BUILD_COMMAND=tremvok-build run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
   [ "$status" -ne 0 ]
-  ! grep -q '^wrangler' "$STUB_LOG"
+  refute grep -q '^wrangler' "$STUB_LOG"
 }
 
 @test "a failing Wrangler fails the step and reports nothing deployed" {
@@ -270,12 +289,104 @@ argv_last() { tail -n +2 "${STUB_LOG}.argv" | tail -1; }
   [ "$(output_value deployed)" = "false" ]
 }
 
-@test "a dry run publishes nothing" {
+@test "a dry run publishes nothing, and is Wrangler's own dry run rather than a log line" {
   MODE=deploy DRY_RUN=true run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
   [ "$status" -eq 0 ]
-  [ ! -s "$STUB_LOG" ]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "1" ]
+  grep -q '^wrangler deploy --dry-run --outdir ' "$STUB_LOG"
   [[ "$output" == *"DRY RUN"* ]]
   [ "$(output_value deployed)" = "false" ]
+}
+
+@test "a dry run of a pull request never uploads a version either" {
+  MODE=preview PREVIEW_ALIAS=pr-1 DRY_RUN=true run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "1" ]
+  grep -q '^wrangler deploy --dry-run ' "$STUB_LOG"
+  refute grep -q 'versions upload' "$STUB_LOG"
+}
+
+@test "a dry run needs no credentials, so a fork or an unwired repository can still validate" {
+  CLOUDFLARE_API_TOKEN= CLOUDFLARE_ACCOUNT_ID= MODE=deploy DRY_RUN=true \
+    run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -eq 0 ]
+  grep -q '^wrangler deploy --dry-run ' "$STUB_LOG"
+}
+
+@test "a dry run that does not bundle fails, and still publishes nothing" {
+  WRANGLER_DRY_RUN_EXIT=1 MODE=deploy DRY_RUN=true run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"did not bundle"* ]]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "1" ]
+  [ "$(output_value deployed)" = "false" ]
+}
+
+# --- cloudflare-verify-config ---------------------------------------------------
+
+@test "verification runs Wrangler's dry run before the deploy, never instead of it" {
+  VERIFY_CONFIG=true MODE=deploy run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "2" ]
+  sed -n 1p "$STUB_LOG" | grep -q '^wrangler deploy --dry-run '
+  sed -n 2p "$STUB_LOG" | grep -q '^wrangler deploy '
+  [[ "$(sed -n 2p "$STUB_LOG")" != *"--dry-run"* ]]
+  [ "$(output_value deployed)" = "true" ]
+}
+
+@test "a preview is verified with deploy --dry-run, then uploaded as a version" {
+  VERIFY_CONFIG=true MODE=preview PREVIEW_ALIAS=pr-1 run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -eq 0 ]
+  sed -n 1p "$STUB_LOG" | grep -q '^wrangler deploy --dry-run '
+  sed -n 2p "$STUB_LOG" | grep -q '^wrangler versions upload --preview-alias pr-1'
+}
+
+@test "an unexpected field stops the publish, even though Wrangler only warned" {
+  # The silent case, verbatim from Wrangler: a misspelled section exits 0 and deploys a Worker
+  # with no bucket. Only the warning says so.
+  VERIFY_CONFIG=true MODE=deploy \
+    WRANGLER_DRY_RUN_WARNING='Unexpected fields found in top-level field: "r2_bucket"' \
+    run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Unexpected fields found in top-level field: "r2_bucket"'* ]]
+  [[ "$output" == *"cloudflare-verify-config"* ]]
+  # The lines echoed into ::error:: annotations are stripped of Wrangler's colour codes.
+  [[ "$(printf '%s\n' "$output" | grep '^::error::' || true)" != *$'\033'* ]]
+
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "1" ]
+  [ "$(output_value deployed)" = "false" ]
+}
+
+@test "a binding an --env deploy would not inherit stops the publish" {
+  VERIFY_CONFIG=true MODE=deploy CF_ENV=staging \
+    WRANGLER_DRY_RUN_WARNING='This is not what you probably want, since "r2_buckets" is not inherited by environments.' \
+    run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not inherited by environments"* ]]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "1" ]
+}
+
+@test "a warning that removes nothing does not stop the publish" {
+  # Wrangler warns about a top-level deploy of a config with environments. Nothing it
+  # declared goes missing, so it is not the failure this check exists for.
+  VERIFY_CONFIG=true MODE=deploy \
+    WRANGLER_DRY_RUN_WARNING='Multiple environments are defined in the Wrangler configuration file, but no target environment was specified for the deploy command.' \
+    run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "2" ]
+}
+
+@test "with verification off, a deploy is exactly one Wrangler call" {
+  VERIFY_CONFIG=false MODE=deploy run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$STUB_LOG" | tr -d ' ')" = "1" ]
+  refute grep -q -- '--dry-run' "$STUB_LOG"
+}
+
+@test "a missing token fails before the verifying dry run, not after a bundle" {
+  CLOUDFLARE_API_TOKEN= VERIFY_CONFIG=true MODE=deploy run bash "${SCRIPTS}/deploy-cloudflare-workers.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cloudflare-api-token"* ]]
+  [ ! -s "$STUB_LOG" ]
 }
 
 @test "the preview url and version id are read out of Wrangler's output" {

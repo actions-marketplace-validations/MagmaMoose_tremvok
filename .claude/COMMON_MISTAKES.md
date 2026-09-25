@@ -251,3 +251,119 @@ on behaviour when the stub can model it: `resolve_merged_pr.bats` pins `curl --f
 stub that answers the way curl does (body + exit 0 without the flag, nothing + exit 22 with
 it), so deleting the flag turns "unreadable" into "no merged pull request" and the test goes
 red.
+
+## An approval is state; only an event authorises an apply
+
+`deploy-terragrunt.sh` under `terragrunt-apply: auto` set `may_apply` on `[[ -n
+"$approver_list" ]]` alone. A pull request that already carries an approval then applies on
+**every** event that reaches the target, so: reviewer approves commit A, author pushes commit
+B, the `pull_request` run for B reads the same standing approval and applies B. Nobody reviewed
+B. It only looks safe on a repository whose branch protection dismisses stale reviews on push,
+which the action cannot see and must not assume.
+
+The rule: read the approval to know the change **may** be applied, and the event to know an
+apply was **asked for now**. Here that is a `pull_request_review` whose review is an approval,
+or the merged-push path with `terragrunt-apply-on-merge` on. Neither `workflow_dispatch` nor a
+COMMENTED review is an approval of the commit in front of you. `EVENT_NAME` is the one source
+for the event; do not re-derive it beside `resolve-mode.sh`.
+
+## Copying the estate pipeline's `stack_is_affected` verbatim plans the whole subtree
+
+That function walks every ancestor of the changed path that is still inside `terraform/`, and
+for each one matches every stack beneath it. Read quickly it looks like "a shared file affects
+the stacks under it". It is not: the walk keeps climbing, so `terraform/<estate>/<a>/<b>/x.tf`
+reaches `terraform/<estate>` and sweeps **every** stack in that estate. Checked against the
+real tree, a file inside one stack maps to 23 stacks under that algorithm and to 1 under
+`terragrunt-discover.sh`; a file under `_modules/` maps to 23 there and to 0 here.
+
+So the walk-down was taken and the climb was not: a changed path with no enclosing stack maps
+to the stacks beneath **its own directory** (`dirname`, once), which is what makes a shared
+`root.hcl` mean its own subtree and leaves the deliberate "a module maps to nothing" rule
+standing. Both scripts agree exactly on the case the fix was for: 23 and 5 stacks for the two
+shared roots in that tree.
+
+## A target in `preflight.sh`'s AWS-credential list is a target that cannot run without AWS
+
+Every terragrunt step in `action.yml` is gated on `steps.preflight.outputs.skip != 'true'`, so
+naming `terragrunt` in that credential check did not degrade the run, it deleted it: no plan,
+no check run, an `::notice::` and a green job. Terragrunt is provider-agnostic and
+`terragrunt-stack-env` exists to carry an Azure or other backend credential, so the only
+targets that belong in that list are the ones whose own scripts call `aws`.
+
+
+## `az functionapp deployment source config-zip` exits non-zero over a deploy that worked
+
+Observed, repeatedly:
+
+```text
+ERROR: Operation returned an invalid status 'Bad Request'
+```
+
+with an exit status to match — and `WEBSITE_RUN_FROM_PACKAGE` pointing at the newly uploaded
+blob, and the app serving the new code. The CLI is reporting a poll of its own status
+endpoint, not the outcome of the deploy.
+
+Both obvious fixes are wrong. Failing on the exit code fails green deploys; appending
+`|| true` hides the real failures, which look identical from outside. So
+`deploy-azure-functions-zip.sh` does neither: on a non-zero exit it asks the platform whether
+`WEBSITE_RUN_FROM_PACKAGE` actually moved, warns and continues if it did, fails if it did not
+— and then, either way, the app has to answer before the run is called a success.
+
+Do not "simplify" this into a plain `||`. `tests/bats/azure_functions.bats` pins both
+directions.
+
+## A Functions zip built the obvious way deploys cleanly and serves nothing
+
+The worker discovers functions from `functions.metadata` and loads the host extensions from
+the dotfile directory `.azurefunctions/`. Both must be at the **archive root**. Two ordinary
+ways of building the zip put them somewhere else:
+
+```bash
+zip -r package.zip publish        # nests everything under publish/
+cd publish && zip -r ../x.zip *   # the glob skips dotfiles: no .azurefunctions/
+cd publish && zip -r -q ../x.zip . # correct
+```
+
+Neither broken package errors. The deploy succeeds, the app starts, and every route 404s with
+no log line saying why. That is why the guard reads entry *names* rather than grepping the
+archive's bytes: a nested package contains the literal text `publish/functions.metadata`, so a
+substring match passes the exact mistake it exists to catch.
+
+## A Linux Consumption Function App on `DOTNET-ISOLATED|10.0` never starts
+
+The platform offers it and `az functionapp create` accepts it. The app then returns 503 from
+the site **and** from its SCM endpoint, with no log output at all, so there is nothing to
+diagnose. `9.0` started first try with a byte-identical package. Verified 2026-09-11.
+
+Related, and the reason this target verifies by HTTP rather than by asking Azure: an
+`azurerm_linux_function_app` in that state reports `state: Running` and
+`availabilityState: Normal`. Platform state is not evidence that anything is being served.
+
+## `actions/upload-pages-artifact` leaves out every dotfile, so `.well-known/` never ships
+
+From v4 the action tars the site with `--exclude=.[^/]*` unless `include-hidden-files` is
+`true`. The agent-readiness step writes `/.well-known/agent-skills/index.json` into the built
+site, the artifact drops it, and GitHub Pages serves the site without it: a 404 at the one path
+a client reads, and no warning anywhere, because nothing failed. Cloudflare's Wrangler uploads
+dot-directories, so the same build on `cloudflare-docs` looks fine, which is what makes this
+look like a Pages problem rather than a Tremvok one.
+
+The Stage step passes `include-hidden-files: ${{ inputs.pages-agent-ready }}`, tied to the input
+so that turning the step off stages exactly what it staged before. `.git` and `.github` are
+excluded either way. `tests/test_gen_docs_agents.py` pins the wiring.
+
+## A browser script served as `fn.toString()` passes in Node and throws from the bundle
+
+The router's landing page script was first a function in `workers/docs-router/src/webmcp.js`,
+served as its own source text, so the code was parsed at import and testable in Node. Every
+test passed. Wrangler bundles with esbuild's `keepNames`, which rewrites each named function
+and arrow into `__name(fn, "fn")`, where `__name` is a helper defined at the top of the bundle.
+The served text then called a function that exists in the Worker and not in the page:
+
+    ReferenceError: __name is not defined
+
+before a single tool registered, on the one page whose job was to register them. The script is
+a `String.raw` template now, served byte for byte whatever the bundler does, and
+`tests/test_workers_bindings.py` runs the dry-run bundle's `/webmcp.js` in an empty context so
+that going back to `toString()` fails CI. The general rule: anything the router sends to a
+browser is data, never a function's source.

@@ -1,0 +1,38 @@
+# One repository's docs site, as a Worker with Static Assets.
+#
+# THIS IS THE TEMPLATE every repository copies to its own root as `wrangler.toml`. Two things
+# change per repo and nothing else does: `name`, and `[assets].directory` if the site is not
+# built to `site/`.
+#
+# It has NO routes and NO workers.dev URL, on purpose. It is not reachable over HTTP at all —
+# the only way in is the router's service binding, which is what makes `require-access` on
+# docs.magmamoose.com a gate on the user rather than a gate the router holds a token past.
+#
+# A BINDING IS ONLY REAL IF IT APPEARS IN `wrangler deploy --dry-run`.
+
+name = "docs-tremvok"
+main = "src/index.js"
+compatibility_date = "2026-09-15"
+
+# No public origin. This is the invariant the service-binding design rests on: if these
+# Workers were reachable directly, Access on docs.magmamoose.com would be a gate with a door
+# beside it.
+workers_dev = false
+
+[assets]
+# The MkDocs build output. `target: cloudflare-docs` refuses to publish this directory empty,
+# for the same reason `aws s3 sync --delete` from an empty build is refused: it succeeds.
+directory = "site"
+
+# The binding the script reaches assets through. Without `binding` there is no `env.ASSETS`,
+# and a Worker with `main` set would answer every request with the script's own 500 rather
+# than serving the site.
+binding = "ASSETS"
+
+# MkDocs emits a 404.html. `404-page` serves it with a 404 status; the default for a Worker
+# with a script would hand the request to the script instead, which here would loop.
+not_found_handling = "404-page"
+
+# Asset requests reach the assets router first. This Worker has no routes of its own to run
+# code on, so there is nothing to declare in `run_worker_first` — that trap belongs to the
+# per-product `<product>.magmamoose.com/mcp` surface, which is a different Worker.

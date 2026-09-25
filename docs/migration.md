@@ -5,9 +5,16 @@
 v1 is the docs-only action. v2 is one action covering six targets, so the input surface had
 to grow a selector and the docs inputs had to move out of the way of it.
 
-**`@v1` keeps working exactly as it does today.** It is not deprecated by this and nothing
-about it changes. Migrate when you want another target, or when you want the input
-validation.
+**`@v1` is frozen at v1.0.18 and keeps working.** It is not deprecated by this. Migrate
+when you want another target, or when you want the input validation.
+
+That sentence used to read "`@v1` keeps working exactly as it does today", and for a day
+it was false. The release job moves the floating major tag onto every stable release, and
+GitVersion cut both breaking changes as patches, so `v1` was force-moved onto v1.0.19 and
+then v1.0.23: every consumer pinned to `@v1` received the v2 contract without asking for
+it, and nine repositories went red on `unknown target 'none'`. `v1` now points at
+v1.0.18, the last release that actually speaks the v1 contract, and `GitVersion.yml`
+makes a breaking change bump the major so the tag can never wander again.
 
 ## What changed, and why
 

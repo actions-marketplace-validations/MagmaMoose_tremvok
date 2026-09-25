@@ -55,7 +55,7 @@ setup() {
     run bash "${SCRIPTS}/deploy-s3-cloudfront.sh"
   [ "$status" -eq 0 ]
   grep -q "s3://site/previews/pr-42" "$STUB_LOG"
-  ! grep -qE "s3 sync [^ ]+ s3://site --" "$STUB_LOG"
+  refute grep -qE "s3 sync [^ ]+ s3://site --" "$STUB_LOG"
 }
 
 @test "a preview without an alias is refused" {
@@ -79,7 +79,7 @@ setup() {
   BUCKET=site ARTIFACT_PATH="$SITE" MODE=deploy DELETE_ORPHANS=false \
     run bash "${SCRIPTS}/deploy-s3-cloudfront.sh"
   [ "$status" -eq 0 ]
-  ! grep -q -- "--delete" "$STUB_LOG"
+  refute grep -q -- "--delete" "$STUB_LOG"
 }
 
 @test "the reported URL points at the preview, not the apex" {

@@ -1,0 +1,107 @@
+# docs.magmamoose.com — the router Worker.
+#
+# One Worker owns the hostname and dispatches /<repo> to that repository's docs Worker over a
+# SERVICE BINDING. See src/index.js for why a binding and not an HTTP proxy; the short version
+# is that a proxy needs a public origin hostname per site (which `workers_dev = false` exists
+# to prevent) and proxying an Access-gated origin moves the gate off the user onto the router.
+#
+# ADDING A REPOSITORY IS ADDING A [[services]] BLOCK HERE. The router reads its route table
+# off `env` at runtime, so this file is the only list — there is no second table in the code
+# to forget.
+#
+# A BINDING IS ONLY REAL IF IT APPEARS IN `wrangler deploy --dry-run`. The rate-limit block
+# takes `name` where every other binding takes `binding`, and an older wrangler pin turns that
+# mistake into a warning nobody reads. `tests/test_workers_bindings.py` asserts every binding
+# in this file shows up in the dry-run output.
+#
+# THE SAME TABLE IS THE HOST ROOT'S LIST OF SITES. The landing page, /llms.txt and
+# /sitemap.xml name every site bound below (except PRIVATE_SITES), each by the title and
+# summary its own llms.txt gives. So a new block here is also a new entry there, with nothing
+# else to edit; see src/root.js.
+
+name = "docs-router"
+main = "src/index.js"
+compatibility_date = "2026-09-15"
+
+# No workers.dev URL. The whole point of routing over service bindings is that no docs Worker
+# has a public origin; a router that had one would be the hole in that.
+workers_dev = false
+
+routes = [
+  { pattern = "docs.magmamoose.com", custom_domain = true },
+]
+
+# ── The fleet's docs sites ───────────────────────────────────────────────────
+#
+# `binding` is the repository name upper-snaked, because a binding name is a JavaScript
+# identifier on `env` and a hyphen is not one. `service` is the name of that repository's own
+# docs Worker, which is `docs-<repo>` by convention — see workers/docs-site/wrangler.toml.
+
+# A BINDING TO A WORKER THAT DOES NOT EXIST IS A FAILED DEPLOY, not a dead route. The API
+# refuses the whole script with `Service binding '<NAME>' references Worker '<service>' which
+# was not found [code: 10143]`, so this table can never run ahead of the site Workers — every
+# name below has to have published at least once before this file can be deployed at all.
+# That is the opposite of the failure the 404 page warns about (a site with no binding, which
+# is quiet); this one is loud and takes the whole router with it.
+
+[[services]]
+binding = "BRIMYR"
+service = "docs-brimyr"
+
+[[services]]
+binding = "CHARGATE"
+service = "docs-chargate"
+
+[[services]]
+binding = "DIATREME"
+service = "docs-diatreme"
+
+[[services]]
+binding = "DRAVENTIS"
+service = "docs-draventis"
+
+[[services]]
+binding = "PONVARA"
+service = "docs-ponvara"
+
+[[services]]
+binding = "TREMVOK"
+service = "docs-tremvok"
+
+# ── The private four, deliberately absent until they have published ─────────
+#
+# caldrith, dunmir, nievah and noctyr carry `docs_require_access: true` in
+# MagmaMoose/admin, so their docs deploy asks Cloudflare which Access applications cover
+# `docs.magmamoose.com/<repo>` and REFUSES when nothing does. Until someone creates those
+# applications by hand in the dashboard — there is no API for it — those four publish no
+# site Worker, and a binding named here would take this router down with them rather than
+# quietly 404 their path.
+#
+# Adding each one back is a `[[services]]` block and a redeploy, in that repo's order:
+#
+#   [[services]]
+#   binding = "NIEVAH"
+#   service = "docs-nievah"
+
+[vars]
+# ROUTED, NEVER LISTED, NEVER READ. Access gates people at the edge; it does not gate this
+# Worker, and a service binding call never passes through it. Bind one of these without this
+# list and the root reads its llms.txt in-process and publishes a private site's name and
+# summary on the public landing page, in /llms.txt and in the sitemap index, past the gate
+# that protects the site itself.
+#
+# Named here BEFORE they are bound, so binding one needs no second edit. A name stays after
+# its site is bound: that is when it starts to matter. A new private docs site belongs here
+# before its [[services]] block lands. Unbound, a name here does nothing at all: the router
+# never echoes this list, and every listing is built from the bindings.
+PRIVATE_SITES = ["caldrith", "dunmir", "nievah", "noctyr"]
+
+# WHERE A PERSON TYPING docs.magmamoose.com ENDS UP. Set, `/` answers a 302 to this page for
+# everything except a client asking for markdown, which still gets the /llms.txt index from
+# here; every other root document is unaffected. Blank, or anything but an https URL, and `/`
+# serves the router's own landing page. See src/root.js.
+#
+# Blank until https://www.magmamoose.com/documentation/ is live (MagmaMoose/website#82): that
+# page lists the same public sites under the Docs tab of the studio's site, and is what this
+# is for. Set before it deploys, and every visitor to the docs root lands on the studio's 404.
+LANDING_REDIRECT = ""

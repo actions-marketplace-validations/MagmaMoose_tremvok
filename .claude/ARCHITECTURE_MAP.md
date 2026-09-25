@@ -3,8 +3,8 @@
 Two surfaces, one repo, no shared imports. They talk over HTTP.
 
 **Action** — `action.yml` is glue: it maps inputs to env vars and runs a script in `scripts/`.
-One action, six targets selected by `target` (`github-pages`, `s3-cloudfront`, `lambda-zip`,
-`terragrunt`, `ansible`, `cloudflare-workers`); only the adapter differs. The pipeline is
+One action, nine targets selected by `target` (the list is in `action.yml`); only the adapter
+differs. The pipeline is
 validate → resolve → preflight → auth → *adapter* → verify → outcome → notify → record.
 `scripts/lib/common.sh` holds logging, `set_output` (heredoc form for multi-line), `is_true`,
 `slug`, `retry`; everything sources it.

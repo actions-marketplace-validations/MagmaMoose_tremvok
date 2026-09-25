@@ -1,0 +1,42 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write        # sign in to Azure by OIDC; no client secret is stored anywhere
+  pull-requests: write   # the sticky preview comment
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  deploy:
+    runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: MagmaMoose/tremvok@v2  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          target: azure-apim-policy
+          # A directory of policy documents: api.xml for the API scope, <operation-id>.xml for
+          # each operation. The instance, the API and its operations are infrastructure and must
+          # already exist; this publishes behaviour into them.
+          artifact-path: apim/webhook
+          apim-service-name: ${{ vars.APIM_SERVICE_NAME }}
+          apim-resource-group: ${{ vars.APIM_RESOURCE_GROUP }}
+          apim-api-id: webhook
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          # A policy API Management accepted is live within seconds; this asserts what it DOES.
+          # For a webhook receiver that is refusing an unsigned request, which needs a POST: the
+          # operation binds POST only, so a GET would be a 404 whatever the policy says.
+          verify-url: https://${{ vars.APIM_SERVICE_NAME }}.azure-api.net/webhook/receive
+          verify-method: POST
+          verify-status: '401'

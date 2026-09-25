@@ -69,7 +69,7 @@ STUBEOF
 @test "the details url is omitted when there is none, not sent empty" {
   DETAILS_URL= run bash "${SCRIPTS}/publish-check.sh"
   [ "$status" -eq 0 ]
-  ! grep -q '"details_url"' "${WORK}/payload.json"
+  refute grep -q '"details_url"' "${WORK}/payload.json"
 }
 
 @test "a title with quotes does not break the payload" {

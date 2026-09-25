@@ -1,5 +1,5 @@
 name: 'Tremvok'
-description: 'Deploy anything: GitHub Pages, Cloudflare Workers, AWS S3/CloudFront & Lambda, Terragrunt, and Ansible.'
+description: 'Deploy anything: GitHub Pages, Cloudflare Workers, Azure Functions, AWS S3/CloudFront & Lambda, Terragrunt, and Ansible.'
 author: 'MagmaMoose'
 
 branding:
@@ -16,9 +16,9 @@ branding:
 # with `s3-bucket` set is a mistake, and it is reported as one.
 #
 # Input names carry their target as a prefix (`pages-`, `s3-`, `cloudfront-`,
-# `lambda-`, `terragrunt-`, `ansible-`), with `aws-` for what every AWS target shares,
-# `build-` for what the two targets that run a build share, and no prefix for what
-# every target shares. The mapping is generated from the
+# `lambda-`, `terragrunt-`, `ansible-`, `functions-`, `apim-`), with `aws-` and `azure-` for what
+# each cloud's targets share, `build-` for what the two targets that run a build share,
+# and no prefix for what every target shares. The mapping is generated from the
 # descriptions below into scripts/lib/input-targets.json, which is what the validator
 # reads and what `tests/test_input_targets.py` keeps honest.
 #
@@ -36,6 +36,11 @@ inputs:
         terragrunt     Discover, plan and (on an approval) apply Terragrunt stacks.
         ansible        Run an Ansible playbook over SSH, then prove it is idempotent.
         cloudflare-workers  Deploy a Worker and its static assets with Wrangler.
+        cloudflare-docs     Build an MkDocs site strictly and publish it to Cloudflare
+                            Workers Static Assets, behind the docs router.
+        azure-functions-zip  Publish a zip to an Azure Function App, then wait for it to answer.
+        azure-apim-policy    Publish policy documents to an existing Azure API Management API,
+                             putting the previous ones back if any is refused.
     required: true
 
   mode:
@@ -90,73 +95,160 @@ inputs:
     required: false
     default: '3600'
 
+  # ── Azure (every target that talks to Azure) ─────────────────────────────────
+  azure-client-id:
+    description: |
+      terragrunt, azure-functions-zip, azure-apim-policy: client id of the Entra ID app registration this run
+      signs in as, using the run's GitHub OIDC token. The Azure counterpart of
+      `aws-role-to-assume`, and preferred over a stored publish profile or client secret for
+      the same reasons: the session is minted per run and expires, and the app registration's
+      federated credential decides which repository and which ref may mint one. A publish
+      profile is a long-lived file carrying the deployment rights of the whole site, tied to
+      nothing. Requires `permissions: id-token: write`. Leave empty to use a session an
+      earlier step created.
+
+      On `terragrunt` this is the PROVIDER's credential and has nothing to do with the state
+      backend's, which `terragrunt-stack-env` carries. `provider "azurerm"` with no explicit
+      auth falls through its default chain to the Azure CLI, so a run with a perfectly good
+      ARM_ACCESS_KEY still fails at plan on a runner nobody signed in.
+    required: false
+    default: ''
+
+  azure-tenant-id:
+    description: 'terragrunt, azure-functions-zip, azure-apim-policy: Entra ID tenant the app registration lives in. Required whenever `azure-client-id` is set.'
+    required: false
+    default: ''
+
+  azure-subscription-id:
+    description: 'terragrunt, azure-functions-zip, azure-apim-policy: subscription to select after login. Required whenever `azure-client-id` is set. On terragrunt it is the CLI default a stack inherits when its own provider block names no subscription.'
+    required: false
+    default: ''
+
+  # ── Google Cloud (every target that talks to GCP) ────────────────────────────
+  gcp-workload-identity-provider:
+    description: |
+      terragrunt: full resource name of the workload identity pool provider this run
+      federates with, `projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`.
+      The Google counterpart of `aws-role-to-assume` and `azure-client-id`, and preferred over
+      a downloaded service-account key for the same reasons: the credential is minted per run
+      and expires, and the pool provider's attribute condition decides which repository and
+      which ref may mint one. A service-account key is a long-lived file, valid until somebody
+      deletes it, tied to nothing. Requires `permissions: id-token: write`. Leave empty to use
+      credentials an earlier step created.
+
+      On `terragrunt` this is the PROVIDER's credential. If your state lives in GCS the
+      backend needs one too, and the same federated credentials serve both.
+    required: false
+    default: ''
+
+  gcp-service-account:
+    description: |
+      terragrunt: service account to impersonate after federating, `name@project.iam.gserviceaccount.com`.
+      Empty (default) uses the federated identity directly, which works when the IAM bindings
+      name the pool's `principalSet` rather than a service account. Set, the pool's principalSet
+      needs `roles/iam.workloadIdentityUser` on it.
+    required: false
+    default: ''
+
+  gcp-project-id:
+    description: 'terragrunt: project exported as GOOGLE_PROJECT and GOOGLE_CLOUD_PROJECT, for configurations that do not name one themselves. Optional.'
+    required: false
+    default: ''
+
   # ── target: github-pages ─────────────────────────────────────────────────────────
   pages-toolchain:
     description: |
-      github-pages: how to install MkDocs, auto (default) | uv | pip. `auto` picks uv when a uv.lock
+      github-pages, cloudflare-docs: how to install MkDocs, auto (default) | uv | pip. `auto` picks uv when a uv.lock
       is present, otherwise pip against `pages-requirements`. Detection exists so a caller does
       not have to declare per-repo what is already visible in the repo.
     required: false
     default: 'auto'
 
   pages-dependency-group:
-    description: 'github-pages: uv dependency-group holding the docs tooling (uv toolchain only).'
+    description: 'github-pages, cloudflare-docs: uv dependency-group holding the docs tooling (uv toolchain only).'
     required: false
     default: 'docs'
 
   pages-requirements:
-    description: 'github-pages: requirements file pinning the docs build (pip toolchain only).'
+    description: 'github-pages, cloudflare-docs: requirements file pinning the docs build (pip toolchain only).'
     required: false
     default: 'docs/requirements.txt'
 
   pages-python-version:
-    description: 'github-pages: Python version used to build the site.'
+    description: 'github-pages, cloudflare-docs: Python version used to build the site.'
     required: false
     default: '3.12'
 
   pages-strict:
     description: |
-      github-pages: build with `--strict`, so a broken internal link or a nav entry pointing at a
+      github-pages, cloudflare-docs: build with `--strict`, so a broken internal link or a nav entry pointing at a
       missing file fails rather than publishing a site with holes in it.
     required: false
     default: 'true'
 
   pages-site-dir:
-    description: 'github-pages: directory the built site is written to.'
+    description: 'github-pages, cloudflare-docs: directory the built site is written to.'
     required: false
     default: 'site'
 
   pages-lint:
     description: |
-      github-pages: run the repo-shape checks (README budget and section order, licence agreement,
+      github-pages, cloudflare-docs: run the repo-shape checks (README budget and section order, licence agreement,
       link targets, Marketplace preflight, INHERIT clobber) before building. These are the
       rules nothing else covers; --strict already catches broken internal links.
     required: false
     default: 'true'
 
   pages-profile:
-    description: 'github-pages: repo profile for the shape checks, auto | action | service | spec.'
+    description: 'github-pages, cloudflare-docs: repo profile for the shape checks, auto | action | service | spec.'
     required: false
     default: 'auto'
 
   pages-readme-budget:
-    description: 'github-pages: override the README line budget. 0 uses the profile default.'
+    description: 'github-pages, cloudflare-docs: override the README line budget. 0 uses the profile default.'
     required: false
     default: '0'
 
   pages-markdownlint:
     description: |
-      github-pages: run markdownlint-cli2 over docs/ and README.md when a markdownlint config is
+      github-pages, cloudflare-docs: run markdownlint-cli2 over docs/ and README.md when a markdownlint config is
       present. Runs here rather than under MegaLinter because MegaLinter's `security` flavor
       carries no markdown linter, and MARKDOWN_MARKDOWNLINT emits no SARIF, so it could never
       gate on net-new findings anyway.
     required: false
     default: 'true'
 
+  pages-seo:
+    description: |
+      github-pages, cloudflare-docs: after the build, give every page its own meta description
+      (from its first paragraph of prose; the home page keeps `site_description`), Open Graph
+      and Twitter tags, a JSON-LD graph (WebSite, TechArticle, BreadcrumbList) and a markdown
+      copy at `<page>/index.md`, linked from the page and from llms.txt. Configured by
+      `extra.seo` in mkdocs.yml (`locale`, `image`, `publisher`, `author`, `twitter`), every
+      key optional. A tag a page already carries is never replaced or doubled, so a site with
+      its own SEO hook keeps it. `false` skips the step.
+    required: false
+    default: 'true'
+
+  pages-agent-ready:
+    description: |
+      github-pages, cloudflare-docs: after the build, make the site agent-ready. Writes an Agent
+      Skills index at `/.well-known/agent-skills/index.json` with one skill that says what the
+      site covers and how to read and cite it; loads WebMCP tools on every page (search the
+      docs, read a page as markdown, list and open pages) from a same-origin script that does
+      nothing in a browser without the API; and, for a public site served at the root of its
+      host, writes an `/auth.md` saying the docs need no credentials, never for a site behind
+      `cloudflare-docs-require-access`. Configured by `extra.agents` in mkdocs.yml (`mcp`,
+      `skill`, `webmcp`, `auth_md`), every key optional. Anything the site already publishes of
+      these is left alone. On github-pages the artifact then includes dot-directories, which is
+      where the index lives. `false` skips the step.
+    required: false
+    default: 'true'
+
   # ── targets that run a build: github-pages, cloudflare-workers ───────────
   build-git-credentials:
     description: |
-      github-pages, cloudflare-workers: credentials for the private git hosts the build fetches
+      github-pages, cloudflare-workers, cloudflare-docs: credentials for the private git hosts the build fetches
       from, one `<host> <username>:<token>` per line. Empty (default) changes nothing.
 
         git.example.invalid  x-access-token:<a short-lived token>
@@ -183,7 +275,7 @@ inputs:
 
   # ── targets: s3-cloudfront, lambda-zip ───────────────────────────────────
   artifact-path:
-    description: 's3-cloudfront, lambda-zip, cloudflare-workers: the built artifact, a directory for s3-cloudfront, a .zip for lambda-zip.'
+    description: 's3-cloudfront, lambda-zip, cloudflare-workers, azure-functions-zip, azure-apim-policy: the built artifact, a directory for s3-cloudfront, a .zip for lambda-zip and azure-functions-zip, and for azure-apim-policy a directory of policy documents: `api.xml` for the API scope and `<operation-id>.xml` for each operation.'
     required: false
     default: ''
 
@@ -257,11 +349,12 @@ inputs:
   terragrunt-pull-request:
     description: |
       terragrunt: act on this pull request number instead of the one in the event payload.
-      For a manual run that has to plan or apply a named pull request. Its reviews are what
-      the approval gate reads, its thread is where the plan comment goes, and its head commit
-      is what the check run is published against, fetched from the API because a dispatch
-      event carries no pull request. Empty (default) uses the event, which is every automatic
-      run. Digits only.
+      For a manual run that has to plan a named pull request. Its reviews are what the
+      approval gate reads, its thread is where the plan comment goes, and its head commit is
+      what the check run is published against, fetched from the API because a dispatch event
+      carries no pull request. Empty (default) uses the event, which is every automatic run.
+      Digits only. A manual run plans: dispatching a workflow is not approving a commit, so
+      `terragrunt-apply: force` is what applies one by hand.
 
       Checking out the right tree stays yours: pass `ref: refs/pull/<n>/merge` to your own
       actions/checkout step and set `checkout: false` here, or the run plans whatever is on
@@ -270,7 +363,13 @@ inputs:
     default: ''
 
   terragrunt-apply:
-    description: 'terragrunt: `auto` (apply when the pull request has an independent approval), `never` (plan only), or `force`.'
+    description: |
+      terragrunt: `auto` (apply on an independent approval), `never` (plan only), or `force`.
+      Under `auto` the run must also be the event that asks for an apply: a pull-request review
+      that is an approval, or a push with `terragrunt-apply-on-merge` on. A run that only finds
+      an approval already standing plans and reports, because that approval was given for the
+      commit it was given for and a commit pushed after it has not been reviewed. Re-approving
+      applies. `force` skips the approval and is restricted to `terragrunt-apply-operators`.
     required: false
     default: 'auto'
 
@@ -390,6 +489,41 @@ inputs:
       the userinfo replaced rather than echoing the line.
     required: false
     default: ''
+
+  terragrunt-credential-preflight:
+    description: |
+      terragrunt: check that every cloud the discovered stacks name has a credential on this
+      runner, before the first plan. `auto` (default) fails the run, `warn` annotates and
+      plans anyway, `off` checks nothing.
+
+      Exists because the credential a terragrunt run needs is not one credential. The state
+      backend has its own (`terragrunt-stack-env`), and every `provider` block the stacks
+      declare has another, from a different chain, that nothing in the workflow mentions. The
+      failure that produces is the least readable in this action: state reads fine, init
+      succeeds, and the plan dies inside a provider with `could not configure AzureCli
+      Authorizer: … Please run 'az login'`, twenty stacks in a row, which reads as a broken
+      runner rather than as a credential nobody wired.
+
+      What it reads: the `provider "<name>"` blocks in each discovered stack and in every
+      parent directory up to `terragrunt-root`, so a `generate` block in a shared root.hcl
+      counts. What it knows: azurerm/azuread/azapi, aws, google/google-beta, vcd. A provider
+      it does not recognise is passed over in silence rather than guessed at.
+
+      The state backend is deliberately not checked. A backend with no credential fails in
+      `init`, immediately, naming the backend, which is already the good failure; and an
+      ARM_ACCESS_KEY opens one storage account and cannot configure a provider, so counting
+      it either way would be wrong.
+
+      What it will NOT report: a provider block that configures its own authentication
+      (`client_id`, `client_secret`, `use_oidc`, `use_msi`, `access_key`, `credentials`,
+      `token`, `api_token` …), because that stack answers the question itself. That is the
+      exemption that keeps this from being a check people turn off.
+
+      This proves a credential is present, never that it is valid or that it can reach the
+      subscription, project or account the stack names — the same distinction
+      `terragrunt-preflight-urls` draws between reachable and authorised.
+    required: false
+    default: 'auto'
 
   terragrunt-log-level:
     description: 'terragrunt: value for TF_LOG when diagnosing a stuck provider call (debug, trace). Empty (default) leaves provider logging off; the log is written next to the plan and redacted before it is shown.'
@@ -556,7 +690,7 @@ inputs:
   # ── target: cloudflare-workers ───────────────────────────────────────────
   cloudflare-api-token:
     description: |
-      cloudflare-workers: API token Wrangler authenticates with. Pass a secret, never a
+      cloudflare-workers, cloudflare-docs: API token Wrangler authenticates with. Pass a secret, never a
       literal. Mint it from Cloudflare's "Edit Cloudflare Workers" template rather than a
       hand-picked permission list, or the first deploy of a custom domain fails on a
       permission nobody thought to grant.
@@ -564,13 +698,13 @@ inputs:
     default: ''
 
   cloudflare-account-id:
-    description: 'cloudflare-workers: Cloudflare account id. Pass a secret.'
+    description: 'cloudflare-workers, cloudflare-docs: Cloudflare account id. Pass a secret.'
     required: false
     default: ''
 
   cloudflare-config:
     description: |
-      cloudflare-workers: path to the Wrangler config (wrangler.toml or wrangler.jsonc),
+      cloudflare-workers, cloudflare-docs: path to the Wrangler config (wrangler.toml or wrangler.jsonc),
       passed as `--config`. Empty lets Wrangler find it, which is the normal case. The
       config owns the asset directory, routes, custom domains and 404 handling; the inputs
       here are overrides for the few things a workflow legitimately varies.
@@ -578,7 +712,7 @@ inputs:
     default: ''
 
   cloudflare-worker-name:
-    description: 'cloudflare-workers: overrides the `name` in the Wrangler config, passed as `--name`.'
+    description: 'cloudflare-workers, cloudflare-docs: overrides the `name` in the Wrangler config, passed as `--name`.'
     required: false
     default: ''
 
@@ -623,22 +757,171 @@ inputs:
     default: ''
 
   cloudflare-wrangler-version:
-    description: 'cloudflare-workers: exact Wrangler version to run. Pinned, because the tool that publishes to production is not a floating dependency.'
+    description: 'cloudflare-workers, cloudflare-docs: exact Wrangler version to run. Pinned, because the tool that publishes to production is not a floating dependency.'
     required: false
     default: '4.114.0'
 
   cloudflare-node-version:
     description: |
-      cloudflare-workers: Node version Wrangler runs on. Wrangler 4 declares
+      cloudflare-workers, cloudflare-docs: Node version Wrangler runs on. Wrangler 4 declares
       `engines.node >= 22`, and on 20 it installs cleanly and then refuses to run, so this
       does not default to whatever the runner happens to ship.
     required: false
     default: '24'
 
+  # ── target: cloudflare-docs ──────────────────────────────────────────────────
+  cloudflare-docs-host:
+    description: |
+      cloudflare-docs: hostname the docs router serves, e.g. `docs.magmamoose.com`. The site
+      Worker itself has no hostname — it is reachable only through the router's service
+      binding — so this is the address the Access check and the reported URL are about.
+      Required when `cloudflare-docs-require-access` is on.
+    required: false
+    default: ''
+
+  cloudflare-docs-path:
+    description: |
+      cloudflare-docs: path segment this repository's site is served under on
+      `cloudflare-docs-host`. Empty (default) uses the repository name, which is what the
+      router dispatches on, so overriding it is for a repo whose site is mounted elsewhere.
+    required: false
+    default: ''
+
+  cloudflare-docs-require-access:
+    description: |
+      cloudflare-docs: refuse to publish unless a Cloudflare Access application actually
+      covers `<cloudflare-docs-host>/<cloudflare-docs-path>`. This is enforcement, not
+      convention: "the site is behind Access" is otherwise a belief nothing checks, and the
+      deploy is the one moment something can ask Cloudflare and refuse. Needs the
+      `Access: Apps` READ permission on `cloudflare-api-token` — the "Edit Cloudflare
+      Workers" template does not include it, and a 403 is treated as "could not tell", never
+      as "nothing covers it".
+    required: false
+    default: 'false'
+
+  cloudflare-docs-index:
+    description: |
+      cloudflare-docs: emit the docs corpus from the build: `llms.txt` and `llms-full.txt`
+      written into the site before it is published, and a search index of every page for
+      the documentation MCP servers. One pass over the markdown that was just rendered; no
+      credentials and no network. Publishing the index is a separate opt-in,
+      `cloudflare-docs-index-bucket`.
+    required: false
+    default: 'true'
+
+  cloudflare-docs-index-bucket:
+    description: |
+      cloudflare-docs: R2 bucket the index is published to, as `index/<repo>.json`. Empty
+      (default) writes llms.txt into the site and uploads no index. Only a deploy writes it,
+      and only after the site itself deployed: a pull request would otherwise overwrite the
+      shared corpus with an unmerged branch. Needs R2 object write on `cloudflare-api-token`,
+      which the "Edit Cloudflare Workers" template does not include.
+    required: false
+    default: ''
+
+  cloudflare-docs-capability-file:
+    description: |
+      cloudflare-docs: this repository's capability declaration, published to
+      `capability/<repo>.json` in `cloudflare-docs-index-bucket`. Empty disables it; the
+      default names a file most repositories do not have, and absent is the normal case —
+      most repositories are not house tools. Present, it is validated against
+      https://mcp.magmamoose.com/schema/capability.schema.json on every run, including a
+      pull request, and a declaration that does not satisfy it FAILS THE RUN: the MCP reads
+      a malformed document as private and reports it as unreadable, counted and never
+      named, which is the one state invisible from the publishing side. `private` is
+      republished from the repository's own visibility on the same fail-closed rule as the
+      docs index, and `commit` and `generated` are stamped from the run.
+    required: false
+    default: 'capability.json'
+
   cloudflare-extra-args:
     description: 'cloudflare-workers: extra flags appended to the Wrangler invocation, split on whitespace.'
     required: false
     default: ''
+
+  cloudflare-verify-config:
+    description: |
+      cloudflare-workers: before publishing, run `wrangler deploy --dry-run` and refuse to
+      publish if Wrangler reports configuration it will not apply: an unexpected field (a
+      misspelled `[[r2_bucket]]` is only a warning, and the Worker deploys with no bucket), or
+      a top-level binding an `--env` deploy does not inherit. A binding is only real if
+      Wrangler prints it. Costs one extra bundle per run.
+    required: false
+    default: 'true'
+
+  # ── target: azure-functions-zip ──────────────────────────────────────────
+  functions-app-name:
+    description: 'azure-functions-zip: the Function App to publish to. Required for this target.'
+    required: false
+    default: ''
+
+  functions-resource-group:
+    description: 'azure-functions-zip: resource group the Function App lives in. Required for this target.'
+    required: false
+    default: ''
+
+  functions-slot:
+    description: |
+      azure-functions-zip: deployment slot to publish to instead of production. Empty
+      (default) publishes to the app itself.
+
+      This is also what a preview has to use. A pull request must not publish onto the
+      routes production serves, and a slot is Azure's only destination that does not —
+      but a Linux Consumption plan HAS NO SLOTS. So on Consumption a preview is refused
+      and says why, rather than quietly shipping a branch to production. On Premium or
+      Dedicated, set this and previews go to the slot.
+    required: false
+    default: ''
+
+  functions-ready-attempts:
+    description: |
+      azure-functions-zip: how many times to ask the app for an answer after publishing,
+      before calling the deploy dead. Any HTTP status passes, including a 404 at the root,
+      which is what a Function App whose only trigger is at `/api/<name>` normally returns.
+      Only a connection failure and a 503 count as "not yet".
+
+      The default is generous on purpose: a freshly created Consumption app 503s from both
+      the site and its SCM endpoint until content is first published, so a FIRST deploy has
+      to retry through that rather than fail on it.
+    required: false
+    default: '30'
+
+  functions-ready-delay:
+    description: 'azure-functions-zip: seconds between readiness attempts. With the default attempts, that is a five-minute ceiling on a cold first publish.'
+    required: false
+    default: '10'
+
+  # ── target: azure-apim-policy ────────────────────────────────────────────
+  apim-service-name:
+    description: 'azure-apim-policy: the API Management instance to publish to. Required for this target.'
+    required: false
+    default: ''
+
+  apim-resource-group:
+    description: 'azure-apim-policy: resource group the instance lives in. Required for this target.'
+    required: false
+    default: ''
+
+  apim-api-id:
+    description: |
+      azure-apim-policy: the API the documents are published to, by its id (the name in its
+      resource id, not its display name). Required for this target.
+
+      The API and its operations must already exist. This target publishes behaviour into them,
+      the way azure-functions-zip publishes code into an existing Function App, and a document
+      named after an operation the API does not have is refused before anything is published.
+    required: false
+    default: ''
+
+  apim-policy-format:
+    description: |
+      azure-apim-policy: how the documents are written. `rawxml` (default) is what the portal's
+      editor shows: policy expressions unescaped, `@(context.Request.Headers.GetValueOrDefault("x", ""))`
+      as it reads. `xml` is strict XML, with every quote and angle bracket inside an expression
+      entity-escaped. Mixing them up fails at publish, when API Management compiles the
+      expressions.
+    required: false
+    default: 'rawxml'
 
   # ── Verification ─────────────────────────────────────────────────────────
   verify-url:
@@ -655,6 +938,22 @@ inputs:
     description: 'Post-deploy: an extended regex the `verify-header` value must match.'
     required: false
     default: ''
+
+  verify-method:
+    description: |
+      Post-deploy: HTTP method used to request `verify-url`. `GET` by default.
+
+      Set it where a GET cannot verify the endpoint at all. A webhook receiver binds POST and
+      nothing else, so a GET reaches no function and the platform answers 404 — which is also
+      what an empty package returns, leaving the check unable to tell a working deploy from a
+      broken one. `verify-method: POST` with `verify-status: 401` asserts that the function is
+      bound and that its signature check refuses an unsigned request, which is the thing worth
+      knowing.
+
+      The method survives a redirect: curl otherwise downgrades a redirected POST to a GET,
+      which would quietly turn the assertion into a different one.
+    required: false
+    default: 'GET'
 
   verify-status:
     description: 'Post-deploy: expected HTTP status from `verify-url`.'
@@ -730,7 +1029,7 @@ outputs:
     value: ${{ steps.resolve.outputs.environment }}
   url:
     description: 'URL of what was deployed, when the target produces one.'
-    value: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url }}
+    value: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
   deployed:
     description: 'true when something was actually deployed (false for a skip).'
     value: ${{ steps.outcome.outputs.deployed }}
@@ -753,8 +1052,8 @@ outputs:
     description: 'github-pages: the toolchain actually used, uv or pip.'
     value: ${{ steps.pages-detect.outputs.toolchain }}
   version-id:
-    description: 'lambda-zip, cloudflare-workers: the published version. A Lambda version number, or a Worker Version ID.'
-    value: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id }}
+    description: 'lambda-zip, cloudflare-workers, azure-functions-zip, azure-apim-policy: the published version. A Lambda version number, a Worker Version ID, the package sha256, or the sha256 of the policy set — Azure exposes no per-deploy content hash of its own.'
+    value: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
   stacks:
     description: 'terragrunt: how many stacks this run discovered.'
     value: ${{ steps.deploy-terragrunt.outputs.stacks }}
@@ -817,6 +1116,8 @@ runs:
       env:
         IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         ROLE_TO_ASSUME: ${{ inputs.aws-role-to-assume }}
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
         TARGET: ${{ inputs.target }}
         ALLOW_FORK_PREVIEW: ${{ inputs.allow-fork-preview }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/preflight.sh"
@@ -836,7 +1137,7 @@ runs:
     # restating it in config is one more thing that can disagree with the repo.
     - name: Detect the docs toolchain
       id: pages-detect
-      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'github-pages'
+      if: steps.preflight.outputs.skip != 'true' && (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs')
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -848,7 +1149,7 @@ runs:
 
     - name: Set up uv
       if: steps.pages-detect.outputs.toolchain == 'uv'
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         python-version: ${{ inputs.pages-python-version }}
 
@@ -864,7 +1165,7 @@ runs:
     # transitively with MkDocs. Hand-rolling a YAML parser to avoid this would be a
     # worse trade than one extra step.
     - name: Install the docs toolchain
-      if: inputs.target == 'github-pages' && steps.pages-detect.outputs.toolchain != ''
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && steps.pages-detect.outputs.toolchain != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -880,7 +1181,7 @@ runs:
         fi
 
     - name: Lint repo shape
-      if: inputs.target == 'github-pages' && inputs.pages-lint == 'true' && steps.pages-detect.outputs.toolchain != ''
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-lint == 'true' && steps.pages-detect.outputs.toolchain != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -900,13 +1201,13 @@ runs:
     # Only when the runner has no Node. A GitHub-hosted runner already does, so this
     # step is skipped there and costs nothing.
     - name: Set up Node for markdownlint
-      if: inputs.target == 'github-pages' && inputs.pages-markdownlint == 'true' && steps.pages-detect.outputs.has-node == 'false'
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-markdownlint == 'true' && steps.pages-detect.outputs.has-node == 'false'
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: '22'
 
     - name: Lint markdown
-      if: inputs.target == 'github-pages' && inputs.pages-markdownlint == 'true' && steps.pages-detect.outputs.toolchain != ''
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-markdownlint == 'true' && steps.pages-detect.outputs.toolchain != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -925,7 +1226,7 @@ runs:
 
     - name: Build the site
       id: pages-build
-      if: inputs.target == 'github-pages' && steps.pages-detect.outputs.toolchain != ''
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && steps.pages-detect.outputs.toolchain != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -943,15 +1244,257 @@ runs:
         fi
         echo "site-dir=$(cd "$SITE_DIR" && pwd)" >> "$GITHUB_OUTPUT"
 
+    # ── both docs targets: page metadata ─────────────────────────────────────
+    #
+    # Per-page descriptions, Open Graph and Twitter tags, JSON-LD and markdown twins, written
+    # into the HTML the build just produced. See scripts/gen_docs_seo.py for what each is for.
+    #
+    # A step and not a MkDocs plugin or hook, for the reason the corpus step below gives: a
+    # plugin has to be named in `plugins:` (a hook in `hooks:`), and a repo that declares
+    # either list in its own mkdocs.yml silently discards the shared mkdocs.base.yml's.
+    #
+    # WHERE IT SITS IS THE CONTRACT. After the build, because it edits the build's output.
+    # Before the Pages artifact is staged and before the Workers deploy, or the site goes out
+    # without any of it. Before the corpus step, because llms.txt links each page's markdown
+    # twin only when it finds one on disk. None of those orderings fails if broken; the site
+    # just quietly loses the metadata, so tests/test_gen_docs_seo.py pins them.
+    #
+    # `--site-url` is the address the router serves the site at, the one the corpus cites. It
+    # stands in only when mkdocs.yml resolves no `site_url`, and a disagreement between the
+    # two is reported rather than silently resolved.
+    - name: Give each page its own search, social and agent metadata
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-seo == 'true' && steps.pages-detect.outputs.toolchain != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TOOLCHAIN: ${{ steps.pages-detect.outputs.toolchain }}
+        SCRIPT: ${{ github.action_path }}/scripts/gen_docs_seo.py
+        SITE_DIR: ${{ inputs.pages-site-dir }}
+        DOCS_HOST: ${{ inputs.cloudflare-docs-host }}
+        DOCS_PATH: ${{ inputs.cloudflare-docs-path || github.event.repository.name }}
+      run: |
+        set -euo pipefail
+        args=(--root . --site-dir "$SITE_DIR")
+        if [ -n "$DOCS_HOST" ]; then
+          args+=(--site-url "https://${DOCS_HOST}/${DOCS_PATH}/")
+        fi
+        if [ "$TOOLCHAIN" = "uv" ]; then
+          uv run --no-sync python "$SCRIPT" "${args[@]}"
+        else
+          python "$SCRIPT" "${args[@]}"
+        fi
+
+    # ── cloudflare-docs only: the corpus ─────────────────────────────────────
+    #
+    # Before the deploy, not after: llms.txt and llms-full.txt are written INTO the built site,
+    # so they have to exist by the time it is uploaded. After the page metadata, because llms.txt
+    # links each page's markdown twin only when it finds one on disk.
+    #
+    # A step rather than a MkDocs plugin. A plugin has to be named in `plugins:`, and a repo
+    # that declares `plugins:` in its own mkdocs.yml silently discards every entry in the
+    # shared mkdocs.base.yml, because MkDocs REPLACES lists rather than merging them.
+    # `pages-lint` fails the build on exactly that, so the corpus must not be what forces
+    # every repo to trip it.
+    #
+    # When `cloudflare-docs-host` is set, citations are built from the address the router
+    # actually serves this site at rather than from `site_url` in mkdocs.yml. A stale
+    # `site_url` would otherwise put a wrong link into every answer an agent gives.
+    - name: Emit the docs corpus
+      id: docs-index
+      if: inputs.target == 'cloudflare-docs' && inputs.cloudflare-docs-index == 'true' && steps.pages-detect.outputs.toolchain != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TOOLCHAIN: ${{ steps.pages-detect.outputs.toolchain }}
+        SCRIPT: ${{ github.action_path }}/scripts/gen_docs_index.py
+        SITE_DIR: ${{ inputs.pages-site-dir }}
+        REPO_NAME: ${{ github.event.repository.name }}
+        DOCS_HOST: ${{ inputs.cloudflare-docs-host }}
+        DOCS_PATH: ${{ inputs.cloudflare-docs-path || github.event.repository.name }}
+        INDEX_DIR: ${{ runner.temp }}/tremvok-docs-index
+        COMMIT: ${{ github.sha }}
+        # Decides whether a public docs surface may show this repository at all. Taken from
+        # GitHub rather than an input, so it cannot drift from the truth, and read as private
+        # unless it is exactly `public`: `internal`, or an event that carries no repository
+        # object, must never mark an index public.
+        VISIBILITY: ${{ github.event.repository.visibility }}
+      run: |
+        set -euo pipefail
+        args=(--root . --site-dir "$SITE_DIR" --repo "$REPO_NAME" \
+              --index-out "$INDEX_DIR" --commit "$COMMIT" --visibility "$VISIBILITY")
+        if [ -n "$DOCS_HOST" ]; then
+          args+=(--site-url "https://${DOCS_HOST}/${DOCS_PATH}/")
+        fi
+        if [ "$TOOLCHAIN" = "uv" ]; then
+          uv run --no-sync python "$SCRIPT" "${args[@]}"
+        else
+          python "$SCRIPT" "${args[@]}"
+        fi
+        echo "index-file=${INDEX_DIR}/index/${REPO_NAME}.json" >> "$GITHUB_OUTPUT"
+
+
+    # ── both docs targets: agent readiness ───────────────────────────────────
+    #
+    # An Agent Skills index with a skill describing the site, WebMCP tools on every page, and an
+    # auth.md for a site served at the root of its host, all written into the built site. See
+    # scripts/gen_docs_agents.py for what each is for, and for what a build cannot do.
+    #
+    # WHERE IT SITS IS THE CONTRACT, as it is for the page metadata. After the metadata and the
+    # corpus, because the skill mentions markdown twins, llms.txt and llms-full.txt only when it
+    # finds them on disk, and run before them it would describe a site with none of the three.
+    # Before the Pages artifact is staged and before the Workers deploy, or the site goes out
+    # without any of it. None of that fails if broken, so tests/test_gen_docs_agents.py pins it.
+    #
+    # `--site-url` is the address the router serves the site at, and here it wins over
+    # `site_url`, as it does for the corpus: the skill's URL in the index is a file a client
+    # fetches, so it has to be where the file actually is.
+    - name: Make the site agent-ready
+      if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-agent-ready == 'true' && steps.pages-detect.outputs.toolchain != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TOOLCHAIN: ${{ steps.pages-detect.outputs.toolchain }}
+        SCRIPT: ${{ github.action_path }}/scripts/gen_docs_agents.py
+        SITE_DIR: ${{ inputs.pages-site-dir }}
+        DOCS_HOST: ${{ inputs.cloudflare-docs-host }}
+        DOCS_PATH: ${{ inputs.cloudflare-docs-path || github.event.repository.name }}
+        # A site behind Access is read by nobody who has not signed in, so it gets no auth.md
+        # saying it needs no credentials. The script reads the value the way the Access check
+        # does. On github-pages it is always false, and a gated Pages site sets
+        # extra.agents.auth_md: false instead.
+        REQUIRE_ACCESS: ${{ inputs.cloudflare-docs-require-access }}
+      run: |
+        set -euo pipefail
+        args=(--root . --site-dir "$SITE_DIR" --access-required "$REQUIRE_ACCESS")
+        if [ -n "$DOCS_HOST" ]; then
+          args+=(--site-url "https://${DOCS_HOST}/${DOCS_PATH}/")
+        fi
+        if [ "$TOOLCHAIN" = "uv" ]; then
+          uv run --no-sync python "$SCRIPT" "${args[@]}"
+        else
+          python "$SCRIPT" "${args[@]}"
+        fi
+
+    # ── target: github-pages ─────────────────────────────────────────────────
     - name: Configure Pages
-      if: steps.pages-detect.outputs.stage-pages == 'true'
+      if: inputs.target == 'github-pages' && steps.pages-detect.outputs.stage-pages == 'true'
       uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
+    # HIDDEN FILES GO IN WHEN THE AGENT STEP RAN. upload-pages-artifact leaves out every path
+    # that starts with a dot unless told otherwise, and the Agent Skills index lives under
+    # `.well-known/`: the step writes it, the artifact drops it, and the published site has no
+    # skills, with nothing anywhere saying so. Tied to the input, so turning the step off stages
+    # exactly what it staged before. `.git` and `.github` are left out either way.
     - name: Stage the Pages artifact
-      if: steps.pages-detect.outputs.stage-pages == 'true'
+      if: inputs.target == 'github-pages' && steps.pages-detect.outputs.stage-pages == 'true'
       uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
       with:
         path: ${{ inputs.working-directory }}/${{ inputs.pages-site-dir }}
+        include-hidden-files: ${{ inputs.pages-agent-ready }}
+
+    # ── target: cloudflare-docs ──────────────────────────────────────────────
+    #
+    # The build above is shared with github-pages; only the publish differs. What is published
+    # is a Worker with static assets and no route of its own: the docs router on
+    # `cloudflare-docs-host` reaches it over a service binding. See workers/docs-router/.
+    - name: Set up Node for Wrangler
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-docs'
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.cloudflare-node-version }}
+
+    # Before the publish, not after. A site that went out uncovered is already public, and
+    # "we noticed afterwards" is what this check exists to prevent.
+    #
+    # AND ONLY WHEN THERE IS A PUBLISH. `mode` is what decides that, so it belongs in this
+    # condition beside the target: a pull request resolves to `preview`, and these Workers
+    # have no preview destination at all — `deploy-cloudflare-docs.sh` and
+    # `publish-docs-index.sh` both return early on any mode but `deploy`. Gating on the
+    # target alone made this the one docs step that ran when nothing was going to be
+    # published, which turns every documentation pull request in a repo with
+    # `cloudflare-docs-require-access` permanently red for a deploy it was never going to
+    # do. A required check that is always failing is a check people learn to merge past,
+    # which costs more than the early warning is worth.
+    #
+    # `github-pages` never had this problem and the difference is worth naming, because it
+    # is not that v1 was more careful: its caller passed `target: none` on a pull request,
+    # so every target-gated step fell away with it. `mode` replaced that, and this step did
+    # not get the memo.
+    - name: Is the docs site actually behind Access?
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-docs' && steps.resolve.outputs.mode == 'deploy'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        REQUIRE_ACCESS: ${{ inputs.cloudflare-docs-require-access }}
+        ACCESS_HOST: ${{ inputs.cloudflare-docs-host }}
+        ACCESS_PATH: ${{ inputs.cloudflare-docs-path || github.event.repository.name }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/access-covers.sh"
+
+    - name: Deploy — Cloudflare docs
+      id: deploy-cloudflare-docs
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-docs'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        SITE_DIR: ${{ inputs.pages-site-dir }}
+        CONFIG: ${{ inputs.cloudflare-config }}
+        WORKER_NAME: ${{ inputs.cloudflare-worker-name }}
+        CF_ENV: ${{ inputs.cloudflare-env }}
+        DOCS_HOST: ${{ inputs.cloudflare-docs-host }}
+        DOCS_PATH: ${{ inputs.cloudflare-docs-path || github.event.repository.name }}
+        WRANGLER_VERSION: ${{ inputs.cloudflare-wrangler-version }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/deploy-cloudflare-docs.sh"
+
+    # After the site deployed, never before. The index is what every agent-facing surface
+    # reads, so it has to describe a site that exists: published ahead of a deploy that then
+    # failed, agents would cite pages the router does not serve.
+    - name: Publish the docs corpus
+      if: inputs.target == 'cloudflare-docs' && inputs.cloudflare-docs-index-bucket != '' && steps.docs-index.outputs.index-file != '' && steps.deploy-cloudflare-docs.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INDEX_FILE: ${{ steps.docs-index.outputs.index-file }}
+        BUCKET: ${{ inputs.cloudflare-docs-index-bucket }}
+        REPO: ${{ github.event.repository.name }}
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        WRANGLER_VERSION: ${{ inputs.cloudflare-wrangler-version }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/publish-docs-index.sh"
+
+    # Validated on every run, uploaded only by a deploy. A declaration checked only on `main`
+    # is checked after the merge that broke it, so the pull request is green and the deploy
+    # that finds out is somebody else's; but there is one key per repository, so a preview
+    # that wrote would overwrite the shared registry with an unmerged branch. Ordered after
+    # the site for the same reason as the corpus: a capability cites documentation pages.
+    - name: Publish the capability declaration
+      if: inputs.target == 'cloudflare-docs' && inputs.cloudflare-docs-capability-file != '' && inputs.cloudflare-docs-index-bucket != '' && steps.deploy-cloudflare-docs.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CAPABILITY_FILE: ${{ inputs.cloudflare-docs-capability-file }}
+        BUCKET: ${{ inputs.cloudflare-docs-index-bucket }}
+        REPO: ${{ github.event.repository.name }}
+        COMMIT: ${{ github.sha }}
+        # Same source and same fail-closed rule as the docs index: only an explicit `public`
+        # publishes a public declaration, so `internal`, an empty value and an event carrying
+        # no repository object are all private. Two visibility rules over one bucket is one
+        # rule that eventually disagrees with the other, and it disagrees in the leaking
+        # direction.
+        VISIBILITY: ${{ github.event.repository.visibility }}
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        WRANGLER_VERSION: ${{ inputs.cloudflare-wrangler-version }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/publish-capability.sh"
 
     # ── targets: s3-cloudfront, lambda-zip, terragrunt ───────────────────────
     - name: Assume the deployment role
@@ -962,6 +1505,43 @@ runs:
         AWS_REGION: ${{ inputs.aws-region }}
         ROLE_DURATION_SECONDS: ${{ inputs.aws-role-duration-seconds }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/assume-role.sh"
+
+    # ── targets: terragrunt, azure-functions-zip, azure-apim-policy ─────────
+    # The Azure counterpart of the assume-role step, gated on the input rather than on a
+    # target for the same reason that one is: the question "has the caller asked for a
+    # session?" is the same question whichever target consumes it.
+    #
+    # A script rather than `azure/login`, for the reason this repository does not use
+    # `aws-actions/configure-aws-credentials` either: a third-party action inside the step
+    # that holds production credentials, for an exchange that is one `az login` call. A
+    # caller who prefers it runs it earlier and leaves azure-client-id empty.
+    #
+    # ON TERRAGRUNT THIS IS THE PROVIDER'S CREDENTIAL, WHICH IS NOT THE STATE BACKEND'S.
+    # `terragrunt-stack-env` carries the backend one (an ARM_ACCESS_KEY per stack), so a run
+    # without this step reads and writes state perfectly well and then dies at
+    # `provider "azurerm"`, whose default chain falls through to the Azure CLI. That failure
+    # reads as a broken runner rather than as a missing credential, which is why
+    # terragrunt-credentials.sh below says so in one line before the first plan.
+    - name: Sign in to Azure
+      if: steps.preflight.outputs.skip != 'true' && inputs.azure-client-id != ''
+      shell: bash
+      env:
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/azure-login.sh"
+
+    # ── target: terragrunt ───────────────────────────────────────────────────
+    # The third of the set, gated on its input like the other two. Nothing else here publishes
+    # to Google, so this is terragrunt's alone until something does.
+    - name: Federate with Google Cloud
+      if: steps.preflight.outputs.skip != 'true' && inputs.gcp-workload-identity-provider != ''
+      shell: bash
+      env:
+        WORKLOAD_IDENTITY_PROVIDER: ${{ inputs.gcp-workload-identity-provider }}
+        GCP_SERVICE_ACCOUNT: ${{ inputs.gcp-service-account }}
+        GCP_PROJECT_ID: ${{ inputs.gcp-project-id }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/gcp-login.sh"
 
     - name: Deploy, S3 + CloudFront
       id: deploy-s3
@@ -1039,10 +1619,15 @@ runs:
         STACK_ENV: ${{ inputs.terragrunt-stack-env }}
         CHECK_NAME: ${{ inputs.terragrunt-check-name }}
         TG_REFRESH: ${{ inputs.terragrunt-refresh }}
+        TG_CREDENTIAL_PREFLIGHT: ${{ inputs.terragrunt-credential-preflight }}
         TG_TIMEOUT: ${{ inputs.terragrunt-timeout }}
         TG_LOG_LEVEL: ${{ inputs.terragrunt-log-level }}
         EXTRA_ARGS: ${{ inputs.terragrunt-extra-args }}
         EVENT_NAME: ${{ github.event_name }}
+        # The review's own state, so a run triggered by a COMMENTED review does not spend an
+        # approval left on an earlier commit. Empty on every other event.
+        REVIEW_STATE: ${{ github.event.review.state }}
+        EVENT_ACTION: ${{ github.event.action }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         # The override, resolved in terragrunt-changed-files.sh rather than by a `||` here:
@@ -1126,7 +1711,39 @@ runs:
         EXTRA_ARGS: ${{ inputs.cloudflare-extra-args }}
         WRANGLER_VERSION: ${{ inputs.cloudflare-wrangler-version }}
         DRY_RUN: ${{ inputs.dry-run }}
+        VERIFY_CONFIG: ${{ inputs.cloudflare-verify-config }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/deploy-cloudflare-workers.sh"
+
+    - name: Deploy, Azure Functions package
+      id: deploy-azure-functions
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'azure-functions-zip'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        APP_NAME: ${{ inputs.functions-app-name }}
+        RESOURCE_GROUP: ${{ inputs.functions-resource-group }}
+        SLOT: ${{ inputs.functions-slot }}
+        ARTIFACT_PATH: ${{ inputs.artifact-path }}
+        READY_ATTEMPTS: ${{ inputs.functions-ready-attempts }}
+        READY_DELAY: ${{ inputs.functions-ready-delay }}
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/deploy-azure-functions-zip.sh"
+
+    - name: Deploy, API Management policies
+      id: deploy-azure-apim
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'azure-apim-policy'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SERVICE_NAME: ${{ inputs.apim-service-name }}
+        RESOURCE_GROUP: ${{ inputs.apim-resource-group }}
+        API_ID: ${{ inputs.apim-api-id }}
+        ARTIFACT_PATH: ${{ inputs.artifact-path }}
+        POLICY_FORMAT: ${{ inputs.apim-policy-format }}
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/deploy-azure-apim-policy.sh"
 
     # ── Verify, then tell the humans ─────────────────────────────────────────
     - name: Verify it actually went live
@@ -1137,6 +1754,7 @@ runs:
         VERIFY_URL: ${{ inputs.verify-url }}
         VERIFY_HEADER: ${{ inputs.verify-header }}
         VERIFY_HEADER_MATCH: ${{ inputs.verify-header-match }}
+        VERIFY_METHOD: ${{ inputs.verify-method }}
         EXPECT_STATUS: ${{ inputs.verify-status }}
         ATTEMPTS: ${{ inputs.verify-attempts }}
         DELAY: ${{ inputs.verify-delay }}
@@ -1153,6 +1771,8 @@ runs:
         LAMBDA_DEPLOYED: ${{ steps.deploy-lambda.outputs.deployed }}
         TG_DEPLOYED: ${{ steps.deploy-terragrunt.outputs.deployed }}
         CF_DEPLOYED: ${{ steps.deploy-cloudflare.outputs.deployed }}
+        AZ_DEPLOYED: ${{ steps.deploy-azure-functions.outputs.deployed }}
+        APIM_DEPLOYED: ${{ steps.deploy-azure-apim.outputs.deployed }}
         ANSIBLE_DEPLOYED: ${{ steps.deploy-ansible.outputs.deployed }}
         JOB_STATUS: ${{ job.status }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/collect-outcome.sh"
@@ -1169,8 +1789,8 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         COMMENT_KEY: ${{ inputs.target }}-${{ steps.resolve.outputs.environment }}
         STATUS: ${{ steps.outcome.outputs.status }}
-        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url }}
-        VERSION: ${{ steps.deploy-lambda.outputs.version-id }}
+        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
+        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
         VERIFIED: ${{ steps.verify.outputs.verified }}
         MODE: ${{ steps.resolve.outputs.mode }}
         TARGET: ${{ inputs.target }}
@@ -1189,8 +1809,8 @@ runs:
         TARGET: ${{ inputs.target }}
         MODE: ${{ steps.resolve.outputs.mode }}
         ENVIRONMENT: ${{ steps.resolve.outputs.environment }}
-        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url }}
-        VERSION: ${{ steps.deploy-lambda.outputs.version-id }}
+        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
+        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
         VERIFIED: ${{ steps.verify.outputs.verified }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/notify-webhook.sh"
@@ -1206,8 +1826,8 @@ runs:
         TARGET: ${{ inputs.target }}
         MODE: ${{ steps.resolve.outputs.mode }}
         ENVIRONMENT: ${{ steps.resolve.outputs.environment }}
-        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url }}
-        VERSION: ${{ steps.deploy-lambda.outputs.version-id }}
+        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
+        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
         VERIFIED: ${{ steps.verify.outputs.verified }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/record-deployment.sh"
