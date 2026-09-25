@@ -159,6 +159,43 @@ STUBEOF
   [[ "$output" != *"user:pw@"* ]]
 }
 
+# Tofu masks what a provider marks sensitive. These are the shapes it prints a credential in when
+# nothing marked it: an attribute, or a map key in tags or app settings, changing value.
+@test "an update is redacted on both sides of its ->, whatever the old value was" {
+  printf '%s\n' \
+    '      ~ client_secret = "old-value" -> "new-value"' \
+    '      ~ api_token     = null -> "new-value"' \
+    '      - password      = "old-value" -> null' \
+    '      ~ name          = "old-name" -> "new-name"' >secrets.txt
+  run bash "${SCRIPTS}/terragrunt-run.sh" redact secrets.txt
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf '%s\n' \
+    '      ~ client_secret = "***" -> "***"' \
+    '      ~ api_token     = null -> "***"' \
+    '      - password      = "***" -> null' \
+    '      ~ name          = "old-name" -> "new-name"')" ]
+}
+
+@test "a quoted map key names a credential as surely as a bare attribute does" {
+  printf '%s\n' \
+    '          + "api_token"      = "map-value"' \
+    '          ~ "WEBHOOK_SECRET" = "old-value" -> "new-value"' \
+    '          + "Purpose"        = "build cache"' >secrets.txt
+  run bash "${SCRIPTS}/terragrunt-run.sh" redact secrets.txt
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf '%s\n' \
+    '          + "api_token"      = "***"' \
+    '          ~ "WEBHOOK_SECRET" = "***" -> "***"' \
+    '          + "Purpose"        = "build cache"')" ]
+}
+
+@test "a value with an escaped quote in it is masked whole, not up to the quote" {
+  printf '%s\n' '      + password = "pa\"ss\"word"' >secrets.txt
+  run bash "${SCRIPTS}/terragrunt-run.sh" redact secrets.txt
+  [ "$status" -eq 0 ]
+  [ "$output" = '      + password = "***"' ]
+}
+
 @test "an unknown action fails rather than doing something surprising" {
   run bash "${SCRIPTS}/terragrunt-run.sh" destroy stack out
   [ "$status" -ne 0 ]

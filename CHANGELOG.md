@@ -300,6 +300,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   they are left out for a pointer to the run. A stack with no changes gets its table row and no
   excerpt, and terminal colour codes are stripped before an excerpt is measured. `notify-pr.sh`
   cuts any other body that is still too long, and says so in the comment.
+- **The Terragrunt plan comment reads as tofu printed it.** Terragrunt's default log format opens
+  every line of tofu's output with `20:01:34.257 STDOUT tofu: `, and that reached every excerpt.
+  It is now stripped along with the colour codes, so the same budget holds about twice as much
+  plan, and an excerpt cut to size starts on a whole line rather than mid-word. The Plan column
+  no longer says "see details" for a stack with changes: the summary is read after the colour
+  codes are gone, where one used to sit between `Plan:` and its counts. An excerpt is redacted
+  after it is stripped, so a colour code between a credential's name and its value cannot hide
+  it from the pattern.
+- **Plan redaction covers the shapes a diff prints a credential in.** An update,
+  `~ client_secret = "old" -> "new"`, posted its new value in the clear. A quoted map key,
+  `"api_token" = "value"`, was not matched at all, and a value with an escaped quote was masked
+  only up to the quote. Tofu already hides what a provider marks sensitive, so this is a
+  credential in tags, app settings or an attribute nothing marked.
 
 ## [2.0.0]
 

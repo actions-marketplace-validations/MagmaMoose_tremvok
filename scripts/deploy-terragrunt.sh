@@ -181,6 +181,18 @@ capitalize() {
   printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "${1:1}"
 }
 
+# A plan as tofu printed it. Terminal colour codes render as `[90m` noise in a comment and each
+# one costs six bytes of JSON escaping; any CSI sequence, not just SGR. Terragrunt's default log
+# format also opens every line of tofu's output with `20:01:34.257 STDOUT tofu: `, 26 bytes
+# before the line says anything. Both come out before an excerpt is measured, and before the
+# summary is read, because a colour code sits between `Plan:` and its counts.
+plain_text() { # [file]
+  LC_ALL=C sed -E \
+    -e "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" \
+    -e 's/^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} +STD(OUT|ERR) +(\[[^]]*\] +)?[^ ]*(tofu|terraform): //' \
+    "$@"
+}
+
 validate_stack_env
 
 # ── which stacks ─────────────────────────────────────────────────────────────────────────
@@ -400,7 +412,7 @@ for stack in "${stacks[@]}"; do
     changes) badge='📝 changes' ;;
     *) badge='❌ failed' ;;
   esac
-  summary_line="$(grep -aoE 'Plan: [0-9]+ to add, [0-9]+ to change, [0-9]+ to destroy' "${out}/plan.txt" 2>/dev/null | tail -1 || true)"
+  summary_line="$(plain_text "${out}/plan.txt" 2>/dev/null | grep -aoE 'Plan: [0-9]+ to add, [0-9]+ to change, [0-9]+ to destroy' | tail -1 || true)"
   [[ -z "$summary_line" ]] && summary_line=$([[ "$status" == "no-changes" ]] && printf 'No changes' || printf 'see details')
   short="${stack#"${ROOT_DIR}"/}"
   rows+="| \`${short}\` | ${badge} | ${summary_line} |"$'\n'
@@ -414,15 +426,18 @@ for stack in "${stacks[@]}"; do
   fi
 done
 
-# Terminal colour codes render as `[90m` noise in a comment, and each one costs six bytes of
-# JSON escaping, so they come out before an excerpt is measured. Any CSI sequence, not just SGR.
-strip_ansi() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g"; }
-
 build_details() { # excerpt-bytes
-  local limit="$1" i excerpt out=""
+  local limit="$1" i plain excerpt out=""
   for ((i = 0; i < ${#detail_stacks[@]}; i++)); do
     if [[ -s "${detail_files[$i]}" ]]; then
-      excerpt="$("${here}/terragrunt-run.sh" redact "${detail_files[$i]}" | strip_ansi | tail -c "$limit")"
+      # Plain before redacted, so a colour code between a credential's name and its value
+      # cannot hide it from the pattern and then be stripped out from in front of it.
+      plain="${detail_files[$i]%.txt}.plain.txt"
+      plain_text "${detail_files[$i]}" | "${here}/terragrunt-run.sh" redact >"$plain"
+      excerpt="$(tail -c "$limit" "$plain")"
+      # Cut to size, the excerpt opens mid-line; start it on the next whole one.
+      if (( $(wc -c <"$plain") > limit )); then excerpt="${excerpt#*$'\n'}"; fi
+      rm -f "$plain"
     else
       excerpt='No plan output was produced; see the workflow run.'
     fi

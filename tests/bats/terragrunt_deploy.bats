@@ -738,6 +738,77 @@ STUBEOF
   refute grep -q "$(printf '\033')" "${WORK_DIR}/comment.md"
 }
 
+# Terragrunt's default log format, byte for byte as a 1.0 run wrote it into a real comment.
+@test "Terragrunt's log prefix does not reach the plan comment, so the excerpt reads as tofu printed it" {
+  stub_script terragrunt <<'STUBEOF'
+#!/usr/bin/env bash
+tg() { printf '\033[90m20:01:34.257\033[m \033[37mSTDOUT\033[m \033[36mtofu: \033[m%s\n' "$1"; }
+case "$1" in
+  init) exit 0 ;;
+  plan) tg $'  \033[1m# azurerm_service_plan.this\033[0m will be \033[1m\033[31mdestroyed\033[0m'
+        tg $'  \033[31m-\033[0m\033[0m resource "azurerm_service_plan" "this" {'
+        tg $'      \033[31m-\033[0m\033[0m worker_count = 0 \033[90m-> null\033[0m\033[0m'
+        tg '    }'
+        tg ''
+        tg $'\033[0m\033[1mPlan:\033[0m 0 to add, 0 to change, 1 to destroy.'
+        exit 2 ;;
+esac
+exit 0
+STUBEOF
+  PR_NUMBER=42 run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -qx '  # azurerm_service_plan.this will be destroyed' "${WORK_DIR}/comment.md"
+  grep -qx '      - worker_count = 0 -> null' "${WORK_DIR}/comment.md"
+  refute grep -q 'STDOUT' "${WORK_DIR}/comment.md"
+}
+
+@test "the Plan column reads the summary through colour codes rather than saying 'see details'" {
+  stub_script terragrunt <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  init) exit 0 ;;
+  plan) printf '\033[90m20:01:34.257\033[m \033[37mSTDOUT\033[m \033[36mtofu: \033[m\033[0m\033[1mPlan:\033[0m 7 to add, 0 to change, 3 to destroy.\n'; exit 2 ;;
+esac
+exit 0
+STUBEOF
+  PR_NUMBER=42 run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q '| Plan: 7 to add, 0 to change, 3 to destroy |' "${WORK_DIR}/comment.md"
+  refute grep -q 'see details' "${WORK_DIR}/comment.md"
+}
+
+@test "an excerpt cut to size starts on a whole line rather than mid-word" {
+  stub_script terragrunt <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  init) exit 0 ;;
+  plan) for i in $(seq 100 300); do printf '  + resource "x" "r%s" {}\n' "$i"; done
+        printf 'Plan: 201 to add, 0 to change, 0 to destroy.\n'; exit 2 ;;
+esac
+exit 0
+STUBEOF
+  MAX_COMMENT_EXCERPT=500 PR_NUMBER=42 run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  first="$(awk 'f { print; exit } /^```text$/ { f = 1 }' "${WORK_DIR}/comment.md")"
+  printf '%s\n' "$first" | grep -qxE '  \+ resource "x" "r[0-9]{3}" \{\}'
+  grep -q 'Plan: 201 to add' "${WORK_DIR}/comment.md"
+}
+
+@test "a colour code inside a credential cannot carry it past the redaction" {
+  stub_script terragrunt <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  init) exit 0 ;;
+  plan) printf 'client_secret\033[0m = "hunter2"\nPlan: 1 to add, 0 to change, 0 to destroy.\n'; exit 2 ;;
+esac
+exit 0
+STUBEOF
+  PR_NUMBER=42 run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q 'client_secret = "\*\*\*"' "${WORK_DIR}/comment.md"
+  refute grep -q hunter2 "${WORK_DIR}/comment.md"
+}
+
 # Thirty stacks with 50 KB of plan each: the unbudgeted comment was 180 KB, which GitHub refuses
 # and which curl could not even be handed as an argument.
 @test "a plan across many large stacks still fits in one comment" {

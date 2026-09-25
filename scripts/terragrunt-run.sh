@@ -39,10 +39,17 @@ TG_STATE_LOCK="${TG_STATE_LOCK:-true}"
 
 # Redact before anything is shown. Terraform marks its own sensitive outputs, but a provider
 # can print a token in an error message and a pull-request comment is world-readable on a
-# public repository. Matches `name = "value"` where the name looks like a credential.
+# public repository. Matches `name = "value"` where the name looks like a credential, and the
+# two other shapes a plan diff prints one in: a quoted map key, `"api_token" = "value"`, and an
+# update, whose new value after `->` is as secret as the old one, `null` or not.
 redact() {
+  local name value
+  name='(password|secret|token|api_key|access_key|private_key|client_secret)[a-z_]*"?[[:space:]]*=[[:space:]]*'
+  # Escaped quotes and all, so `"pa\"ss"` is masked whole rather than leaving `ss"` behind.
+  value='"([^"\\]|\\.)*"'
   sed -E \
-    -e 's/((password|secret|token|api_key|access_key|private_key|client_secret)[a-z_]*[[:space:]]*=[[:space:]]*)"[^"]*"/\1"***"/gI' \
+    -e "s/(${name})${value}/\\1\"***\"/gI" \
+    -e "s/(${name}(${value}|[^\"[:space:]]+)[[:space:]]*->[[:space:]]*)${value}/\\1\"***\"/gI" \
     -e 's/(AKIA|ASIA)[A-Z0-9]{16}/\1****************/g' \
     -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1***:***@#g'
 }
