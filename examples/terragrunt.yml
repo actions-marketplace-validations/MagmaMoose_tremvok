@@ -31,7 +31,8 @@ permissions:
 
 concurrency:
   # An apply must never be cancelled mid-run: killing terragrunt strands a state lock. A plan
-  # is cheap to redo, so it stays cancellable.
+  # is cheap to redo, so it stays cancellable, and on a pull request it takes no state lock
+  # (terragrunt-plan-lock), so cancelling one strands nothing.
   group: terragrunt-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 

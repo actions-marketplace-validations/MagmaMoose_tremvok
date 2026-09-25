@@ -462,6 +462,21 @@ inputs:
     required: false
     default: 'auto'
 
+  terragrunt-plan-lock:
+    description: |
+      terragrunt: whether a plan takes the state lock. `auto` (default) takes none on a
+      `pull_request` run or on a `pull_request_review` that does not approve, the runs that never
+      apply and that a newer push or review cancels, and takes it on every other run. `always`
+      takes it on every plan, as before. An apply always locks.
+
+      A plan writes nothing to state, and a plan cancelled while it holds the lock can be killed
+      before it releases it. The lock is then stranded: every later run on that stack waits out
+      its lock timeout and fails, until somebody force-unlocks it by hand. What no lock costs is
+      that a plan reading state while another run applies can show a diff that apply is halfway
+      through making. It is a pull-request comment, redone on the next push.
+    required: false
+    default: 'auto'
+
   terragrunt-timeout:
     description: 'terragrunt: seconds any one init, plan or apply may take before it is killed. 0 disables the timeout. A stalled provider call otherwise looks like a silent hang until the job limit.'
     required: false
@@ -1619,6 +1634,7 @@ runs:
         STACK_ENV: ${{ inputs.terragrunt-stack-env }}
         CHECK_NAME: ${{ inputs.terragrunt-check-name }}
         TG_REFRESH: ${{ inputs.terragrunt-refresh }}
+        TG_PLAN_LOCK: ${{ inputs.terragrunt-plan-lock }}
         TG_CREDENTIAL_PREFLIGHT: ${{ inputs.terragrunt-credential-preflight }}
         TG_TIMEOUT: ${{ inputs.terragrunt-timeout }}
         TG_LOG_LEVEL: ${{ inputs.terragrunt-log-level }}

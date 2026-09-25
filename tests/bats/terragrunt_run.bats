@@ -163,3 +163,63 @@ STUBEOF
   run bash "${SCRIPTS}/terragrunt-run.sh" destroy stack out
   [ "$status" -ne 0 ]
 }
+
+# ── the state lock ───────────────────────────────────────────────────────────────────────
+# A plan cancelled while it holds the lock can be killed before it releases it, and a stranded
+# lock fails every later run on that stack until somebody force-unlocks it by hand. A plan
+# writes nothing to state, so the caller can ask for one that never takes it. An apply always
+# takes it: that is what stops two applies writing at once.
+
+@test "a plan takes the state lock and waits for another run's, five minutes at most" {
+  run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
+  [ "$status" -eq 0 ]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}
+
+@test "TG_STATE_LOCK=false plans without the lock, and says so" {
+  TG_STATE_LOCK=false run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
+  [ "$status" -eq 0 ]
+  [ "$(cat out/status)" = "changes" ]
+  grep -q -- 'terragrunt plan .*-lock=false' "$STUB_LOG"
+  refute grep -q -- '-lock-timeout' "$STUB_LOG"
+  [[ "$output" == *"STATE LOCK: this plan does not take it"* ]]
+}
+
+@test "a lock-free plan is still a plan: detailed exit code, saved file and status" {
+  TG_STATE_LOCK=false run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
+  grep -q -- '-detailed-exitcode' "$STUB_LOG"
+  grep -q -- '-out=' "$STUB_LOG"
+  TG_STATE_LOCK=false PLAN_EXIT=0 run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
+  [ "$(cat out/status)" = "no-changes" ]
+}
+
+@test "0, no and off count as false; an empty value is the default, which locks" {
+  for v in 0 no off; do
+    : >"$STUB_LOG"
+    TG_STATE_LOCK=$v run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
+    grep -q -- '-lock=false' "$STUB_LOG"
+  done
+  : >"$STUB_LOG"
+  TG_STATE_LOCK= run bash "${SCRIPTS}/terragrunt-run.sh" plan stack out
+  grep -q -- '-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}
+
+@test "an apply locks whatever TG_STATE_LOCK says, including the plan it makes first" {
+  TG_STATE_LOCK=false run bash "${SCRIPTS}/terragrunt-run.sh" apply stack out
+  [ "$status" -eq 0 ]
+  [ "$(cat out/status)" = "applied" ]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  grep -q -- 'terragrunt apply .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}
+
+@test "the re-plan after a stale saved plan locks too" {
+  printf 'saved-plan\n' >out/plan.tfplan
+  TG_STATE_LOCK=false APPLY_STALE=1 run bash "${SCRIPTS}/terragrunt-run.sh" apply stack out
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gone stale"* ]]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}

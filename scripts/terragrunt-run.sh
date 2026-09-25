@@ -30,6 +30,12 @@ TG_REFRESH="${TG_REFRESH:-auto}"
 TG_TIMEOUT="${TG_TIMEOUT:-900}"
 TG_LOG_LEVEL="${TG_LOG_LEVEL:-}"
 EVENT_NAME="${EVENT_NAME:-}"
+# Whether a PLAN holds the state lock. deploy-terragrunt.sh sets it false for the runs a newer
+# push or review cancels, because a plan writes nothing to state and a cancelled tofu can be
+# killed before it releases the lock, which then fails every later run on that stack until
+# somebody force-unlocks it by hand. It is read by the `plan` action only: an apply, and the
+# re-plan inside one, always lock, because that is what stops two applies writing at once.
+TG_STATE_LOCK="${TG_STATE_LOCK:-true}"
 
 # Redact before anything is shown. Terraform marks its own sensitive outputs, but a provider
 # can print a token in an error message and a pull-request comment is world-readable on a
@@ -95,6 +101,10 @@ run() { # log-file  args...
   return $code
 }
 
+# Wait up to five minutes for a lock another run holds. Replaced by -lock=false in the `plan`
+# action below when the caller asked for a lock-free plan; never touched for an apply.
+lock_flags=( -lock-timeout=5m )
+
 # shellcheck disable=SC2206  # deliberate word splitting: EXTRA_ARGS is a flag string
 extra=( $EXTRA_ARGS )
 # shellcheck disable=SC2206  # deliberate word splitting: refresh_flag is empty or one flag
@@ -108,7 +118,7 @@ do_plan() { # -> 0 no changes, 2 changes, other failed
     return 1
   fi
   # shellcheck disable=SC2086
-  ( cd "$stack" && $timeout_prefix "$TG_BIN" plan -input=false -lock-timeout=5m \
+  ( cd "$stack" && $timeout_prefix "$TG_BIN" plan -input=false "${lock_flags[@]}" \
       -detailed-exitcode -out="$plan_file" \
       ${refresh[@]+"${refresh[@]}"} ${extra[@]+"${extra[@]}"} ) >"${out_dir}/plan.txt" 2>&1 \
     || code=$?
@@ -124,6 +134,10 @@ do_plan() { # -> 0 no changes, 2 changes, other failed
 
 case "$action" in
   plan)
+    if ! tremvok::is_true "$TG_STATE_LOCK"; then
+      lock_flags=( -lock=false )
+      tremvok::log "STATE LOCK: this plan does not take it (TG_STATE_LOCK=${TG_STATE_LOCK}); it writes nothing to state, and a cancelled run cannot strand a lock"
+    fi
     code=0
     do_plan || code=$?
     case $code in

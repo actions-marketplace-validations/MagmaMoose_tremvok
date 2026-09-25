@@ -14,7 +14,7 @@ file; edit the two together.
 
 ## Footguns — read `.claude/COMMON_MISTAKES.md` before debugging any of these
 
-Twenty-seven incidents, each with symptom, cause and fix. The clusters:
+Twenty-eight incidents, each with symptom, cause and fix. The clusters:
 
 - **A script exits silently under `set -e`** — a false `[[ ]]` last in `$( )`, a helper that
   re-enables errexit, a loop ending on a false test, `cmd | tee`.
@@ -23,6 +23,8 @@ Twenty-seven incidents, each with symptom, cause and fix. The clusters:
   being a dependency.
 - **The Lambda imports fine locally and dies on request one** — architecture, installer
   determinism, and why the zip cannot be import-tested on a laptop.
+- **Every pull request fails on one Terragrunt stack** — a cancelled plan stranded its state
+  lock.
 - **A gate that reports the wrong thing** — a required check that never reports, an unreadable
   review list read as "nobody approved".
 - **An AWS call that does something other than what it says** — `sync --delete` on an empty

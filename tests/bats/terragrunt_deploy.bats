@@ -768,3 +768,105 @@ STUBEOF
   grep -q 'Plan excerpts left out' "${WORK_DIR}/comment.md"
   refute grep -q '<details>' "${WORK_DIR}/comment.md"
 }
+
+# ── the state lock ───────────────────────────────────────────────────────────────────────
+# A plan cancelled while it holds the lock can be killed before it releases it, and a stranded
+# lock fails every later run on that stack until somebody force-unlocks it by hand. The runs a
+# newer event cancels, and that never apply, plan without it. Every run that may apply keeps it,
+# and an apply always does.
+
+@test "a pull_request plan takes no state lock, because a newer push cancels it" {
+  PR_NUMBER=42 EVENT_NAME=pull_request run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q -- 'terragrunt plan .*-lock=false' "$STUB_LOG"
+  refute grep -q -- '-lock-timeout' "$STUB_LOG"
+  [[ "$output" == *"take no state lock"* ]]
+}
+
+@test "a commenting or change-requesting review plans without the lock, since it never applies" {
+  for state in commented changes_requested; do
+    : >"$STUB_LOG"
+    PR_NUMBER=42 EVENT_NAME=pull_request_review REVIEW_STATE=$state \
+      run bash "${SCRIPTS}/deploy-terragrunt.sh"
+    [ "$status" -eq 0 ]
+    grep -q -- 'terragrunt plan .*-lock=false' "$STUB_LOG"
+    refute grep -q -- '-lock-timeout' "$STUB_LOG"
+  done
+}
+
+@test "an edited or dismissed approval plans without the lock: it does not apply, so nothing needs one" {
+  approved
+  for action in edited dismissed; do
+    : >"$STUB_LOG"
+    PR_NUMBER=42 EVENT_NAME=pull_request_review EVENT_ACTION=$action REVIEW_STATE=approved \
+      run bash "${SCRIPTS}/deploy-terragrunt.sh"
+    [ "$status" -eq 0 ]
+    [ "$(output_value applied)" = "false" ]
+    grep -q -- 'terragrunt plan .*-lock=false' "$STUB_LOG"
+  done
+}
+
+@test "an approving review keeps the lock for its plan and for its apply" {
+  approved
+  PR_NUMBER=42 EVENT_NAME=pull_request_review REVIEW_STATE=approved \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  [ "$(output_value applied)" = "true" ]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  grep -q -- 'terragrunt apply .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}
+
+@test "a review with no state field is treated as possibly approving, so it keeps the lock" {
+  # An action.yml that predates REVIEW_STATE passes nothing. Absence is evidence of nothing, so
+  # the run may apply and must lock, exactly as the apply decision reads the same field.
+  approved
+  PR_NUMBER=42 EVENT_NAME=pull_request_review run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}
+
+@test "a push, a schedule and a manual run keep the lock: nothing cancels them and they may apply" {
+  for ev in push schedule workflow_dispatch; do
+    : >"$STUB_LOG"
+    SCOPE=all EVENT_NAME=$ev run bash "${SCRIPTS}/deploy-terragrunt.sh"
+    [ "$status" -eq 0 ]
+    grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+    refute grep -q -- '-lock=false' "$STUB_LOG"
+  done
+}
+
+@test "a manual run naming a pull request keeps the lock too, because it may force an apply" {
+  SCOPE=auto EVENT_NAME=workflow_dispatch PR_NUMBER=42 run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+}
+
+@test "terragrunt-plan-lock: always restores the lock on a pull request" {
+  TG_PLAN_LOCK=always PR_NUMBER=42 EVENT_NAME=pull_request \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q -- 'terragrunt plan .*-lock-timeout=5m' "$STUB_LOG"
+  refute grep -q -- '-lock=false' "$STUB_LOG"
+  [[ "$output" != *"take no state lock"* ]]
+}
+
+@test "an unknown terragrunt-plan-lock is refused by name before anything is planned" {
+  TG_PLAN_LOCK=never PR_NUMBER=42 EVENT_NAME=pull_request \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"terragrunt-plan-lock must be auto or always (got 'never')"* ]]
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
+}
+
+@test "every plan in a run gets the same answer, however many stacks there are" {
+  mkdir -p terraform/aws/prod/web terraform/aws/prod/db
+  touch terraform/aws/prod/web/terragrunt.hcl terraform/aws/prod/db/terragrunt.hcl
+  printf 'terraform/aws/prod/api/main.tf\nterraform/aws/prod/web/main.tf\nterraform/aws/prod/db/main.tf\n' >changed.txt
+  PR_NUMBER=42 EVENT_NAME=pull_request run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'terragrunt plan ' "$STUB_LOG")" -eq 3 ]
+  [ "$(grep 'terragrunt plan ' "$STUB_LOG" | grep -c -- '-lock=false')" -eq 3 ]
+}

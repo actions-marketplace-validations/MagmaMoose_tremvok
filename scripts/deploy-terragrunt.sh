@@ -60,6 +60,8 @@ STACK_ENV="${STACK_ENV:-}"
 # default because the failure it replaces costs a full plan cycle across every stack to say
 # less than this does in one line.
 TG_CREDENTIAL_PREFLIGHT="${TG_CREDENTIAL_PREFLIGHT:-auto}"
+# auto | always. Whether a plan takes the state lock; see "does a plan take the state lock?" below.
+TG_PLAN_LOCK="${TG_PLAN_LOCK:-auto}"
 CHECK_NAME="${CHECK_NAME:-Terragrunt apply}"
 RUN_URL="${RUN_URL:-}"
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-/tmp}/tremvok-terragrunt}"
@@ -297,6 +299,57 @@ if [[ -s "$credential_report" ]]; then
   fi
 fi
 
+# ── may this review spend an approval? ───────────────────────────────────────────────────
+# True on the pull_request_review events that may apply: a review that was SUBMITTED (not edited
+# or dismissed) and whose own state is approved. An empty field means the caller's action.yml
+# did not pass it, which is evidence of nothing, so it counts as yes and the approval list
+# decides alone. One definition, used by the apply decision further down and by the lock
+# decision just below, because two copies of "may this run apply?" are how one of them ends up
+# wrong. The reasoning for each half is with the apply decision.
+review_spends_approval() {
+  local action state
+  action="$(printf '%s' "${EVENT_ACTION:-}" | tr '[:upper:]' '[:lower:]')"
+  state="$(printf '%s' "${REVIEW_STATE:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ -z "$action" || "$action" == "submitted" ]] && [[ -z "$state" || "$state" == "approved" ]]
+}
+
+# ── does a plan take the state lock? ─────────────────────────────────────────────────────
+# A plan writes nothing to state. The lock only buys it a wait for a concurrent apply to
+# finish, so that it sees the final state. What the lock costs is a stranded one: the caller
+# cancels a pull-request run whenever a newer push or review arrives, a cancelled tofu can be
+# killed before it releases the lock, and every later run then waits out its lock timeout on
+# that stack and fails, until somebody force-unlocks it by hand. That is not hypothetical: one
+# plan cancelled 15 seconds after it took the lock on a single stack failed every pull request
+# that planned that stack for hours.
+#
+# So `auto` takes no lock for the runs that never apply and that a newer event cancels:
+#   pull_request                          plans and reports; the next push cancels it
+#   pull_request_review, not approving    plans and reports; a comment is not an approval
+# and keeps it for everything else. An approving review may apply, and callers are told never
+# to cancel an apply, so its plan and its apply lock as they always did. push, schedule and
+# workflow_dispatch are not cancelled by a newer event and may apply or report drift, so they
+# keep the lock too. An apply always locks, whatever this says: that is what stops two applies
+# writing at once.
+#
+# The price: a plan that reads state while another run is applying can show a diff that apply is
+# halfway through making. It is a pull-request comment,
+# redone on the next push, and never the plan that gets applied: an apply re-plans, or applies a
+# saved plan that tofu itself refuses when the state has moved since.
+case "$TG_PLAN_LOCK" in
+  auto | always) ;;
+  *) tremvok::fail "terragrunt-plan-lock must be auto or always (got '${TG_PLAN_LOCK}')" ;;
+esac
+plan_state_lock=true
+if [[ "$TG_PLAN_LOCK" == "auto" ]]; then
+  case "$EVENT_NAME" in
+    pull_request) plan_state_lock=false ;;
+    pull_request_review) review_spends_approval || plan_state_lock=false ;;
+  esac
+fi
+if [[ "$plan_state_lock" == "false" ]]; then
+  tremvok::log "plans on this ${EVENT_NAME} run take no state lock (terragrunt-plan-lock: ${TG_PLAN_LOCK}): it never applies, and a newer event cancels it"
+fi
+
 # ── plan every stack, continuing past failures ───────────────────────────────────────────
 plan_failures=0
 plan_changes=0
@@ -323,7 +376,8 @@ for stack in "${stacks[@]}"; do
     while IFS= read -r assignment; do
       [[ -n "$assignment" ]] && stack_env+=( "$assignment" )
     done < <(stack_env_for "$stack")
-    env ${stack_env[@]+"${stack_env[@]}"} "${here}/terragrunt-run.sh" plan "$stack" "$out"
+    env ${stack_env[@]+"${stack_env[@]}"} TG_STATE_LOCK="$plan_state_lock" \
+      "${here}/terragrunt-run.sh" plan "$stack" "$out"
     code=$?
     set -e
   fi
@@ -486,8 +540,6 @@ gate_pr="${PR_NUMBER:-$merged_pr}"
 # EVENT_NAME is the value action.yml already passes from `github.event_name`, the same one
 # resolve-mode.sh reads. Nothing here re-derives the event.
 apply_authorised=false
-review_state="$(printf '%s' "$REVIEW_STATE" | tr '[:upper:]' '[:lower:]')"
-event_action="$(printf '%s' "${EVENT_ACTION:-}" | tr '[:upper:]' '[:lower:]')"
 if [[ "$EVENT_NAME" == "pull_request_review" ]]; then
   # The review's own state, so a COMMENTED or CHANGES_REQUESTED review on a pull request that
   # still holds an older approval re-plans rather than applying: that event is somebody
@@ -503,8 +555,7 @@ if [[ "$EVENT_NAME" == "pull_request_review" ]]; then
   #
   # Empty means the field was not passed at all, which is evidence of nothing, so the approval
   # list decides alone. Both fields are lenient when absent for the same reason.
-  if [[ -z "$event_action" || "$event_action" == "submitted" ]] \
-    && [[ -z "$review_state" || "$review_state" == "approved" ]]; then
+  if review_spends_approval; then
     apply_authorised=true
   fi
 elif [[ -n "$merged_pr" ]]; then

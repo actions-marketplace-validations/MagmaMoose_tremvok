@@ -228,6 +228,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A plan a newer event cancels no longer takes the state lock** (`terragrunt-plan-lock`, `auto`
+  by default). A cancelled `tofu` can be killed before it releases the lock, and the stranded lock
+  then failed every later run on that stack, each after waiting out its lock timeout, until
+  somebody force-unlocked it by hand. Plans now run with `-lock=false` on a `pull_request` and on
+  a `pull_request_review` that does not approve, the runs that never apply. Every run that may
+  apply keeps the lock (an approving review, a push, a schedule, a manual run), and an apply and
+  the re-plan inside one always lock. `terragrunt-plan-lock: always` restores the old behaviour.
+  The price is that a plan reading state during another run's apply can show a diff that apply is
+  halfway through making, in a comment that is redone on the next push.
 - **The docs router can send `/` to a documentation hub kept elsewhere.** With
   `LANDING_REDIRECT` set to an `https` URL in its `wrangler.toml`, `docs.magmamoose.com/`
   answers a `302` there instead of serving the landing page, for every client except one whose

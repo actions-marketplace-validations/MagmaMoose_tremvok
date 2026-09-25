@@ -600,6 +600,31 @@ The gate is the action's own (`scripts/approval-gate.sh`), so it needs no GitHub
 `environment:`. Add an `environment:` to your job only if you want what an environment adds
 beyond the gate: a wait timer, or secrets scoped to it.
 
+#### Cancelling a plan without stranding a state lock
+
+A caller usually cancels the previous run when a newer push or review arrives
+(`cancel-in-progress`). A cancelled `tofu` can be killed before it releases the state lock, and a
+stranded lock fails every later run on that stack, each after waiting out its lock timeout,
+until somebody force-unlocks it by hand. One stack's lock then fails every pull request that
+plans that stack, whatever the pull request changes.
+
+So a plan that a newer event cancels does not take the lock. `terragrunt-plan-lock: auto` (the
+default) plans with `-lock=false` on a `pull_request` run and on a `pull_request_review` that
+does not approve, and both only ever plan. Everything that can apply keeps the lock: an
+approving review, a push, a schedule and a manual run. An apply always locks. `always` puts the
+lock back on every plan.
+
+What no lock costs: a plan that reads state while another run applies can show a diff the apply
+is halfway through making. It is a pull-request comment, redone on the next push, and never the
+plan that is applied, because an apply re-plans or applies a saved plan that `tofu` refuses when
+the state has moved.
+
+Keep not cancelling an apply. Only a plan can go without the lock.
+
+If a lock is already stranded, the failing job's log names it (`ID`, `Path`, `Who`, `Created`).
+Check that nothing is running, then release it from that stack's backend with
+`tofu force-unlock <ID>`. The ID is also the blob lease ID on `azurerm`.
+
 #### Letting a merge apply what it merged
 
 Off by default. A push to the default branch plans and applies nothing unless you ask for

@@ -383,6 +383,12 @@
       ],
       "default": "auto"
     },
+    "terragrunt-plan-lock": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": "auto"
+    },
     "terragrunt-timeout": {
       "targets": [
         "terragrunt"

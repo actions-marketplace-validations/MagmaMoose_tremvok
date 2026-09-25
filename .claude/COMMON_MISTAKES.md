@@ -329,6 +329,28 @@ no log line saying why. That is why the guard reads entry *names* rather than gr
 archive's bytes: a nested package contains the literal text `publish/functions.metadata`, so a
 substring match passes the exact mistake it exists to catch.
 
+## A cancelled plan strands the state lock, and every pull request that plans that stack fails
+
+A `terragrunt` plan takes the backend's state lock. The caller cancels a pull-request run whenever
+a newer push or review arrives, and a cancelled `tofu` can be killed before it releases the lock:
+the runner signals the step's own process and follows with a SIGKILL of the tree, so the signal
+may never reach `tofu`. Every later run then plans its stacks in turn, reaches the locked one,
+waits out `-lock-timeout=5m` and fails the whole job with
+
+    Error acquiring the state lock ... state blob is already locked
+
+whatever its pull request changes. One plan cancelled 15 seconds after it took the lock on one
+stack failed every pull request that planned that stack for hours, and a change under a shared
+module plans every stack, so most did. The job log names the lock (`ID`, `Path`, `Who`,
+`Created`); it stayed until somebody ran `tofu force-unlock <ID>`. On `azurerm` the lock ID is
+also the blob lease ID.
+
+A plan writes nothing to state, so the runs a newer event cancels and that never apply
+(`pull_request`, and a `pull_request_review` that does not approve) plan with `-lock=false`
+(`terragrunt-plan-lock`). Anything that can apply keeps the lock, and an apply always locks,
+including the re-plan inside one. `tests/bats/terragrunt_run.bats` and
+`tests/bats/terragrunt_deploy.bats` pin each event.
+
 ## A Linux Consumption Function App on `DOTNET-ISOLATED|10.0` never starts
 
 The platform offers it and `az functionapp create` accepts it. The app then returns 503 from
