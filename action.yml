@@ -1164,7 +1164,7 @@ runs:
 
     - name: Set up uv
       if: steps.pages-detect.outputs.toolchain == 'uv'
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       with:
         python-version: ${{ inputs.pages-python-version }}
 
@@ -1217,7 +1217,7 @@ runs:
     # step is skipped there and costs nothing.
     - name: Set up Node for markdownlint
       if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-markdownlint == 'true' && steps.pages-detect.outputs.has-node == 'false'
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: '22'
 
@@ -1414,7 +1414,7 @@ runs:
     # `cloudflare-docs-host` reaches it over a service binding. See workers/docs-router/.
     - name: Set up Node for Wrangler
       if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-docs'
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.cloudflare-node-version }}
 
@@ -1701,7 +1701,7 @@ runs:
     # refuses to run, and a self-hosted runner may ship no Node at all.
     - name: Set up Node for Wrangler
       if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-workers'
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.cloudflare-node-version }}
 
