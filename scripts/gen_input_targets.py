@@ -39,6 +39,7 @@ TARGETS = [
     "cloudflare-workers",
     "azure-functions-zip",
     "azure-apim-policy",
+    "gitops-pr",
 ]
 
 # The opening `<targets>:` marker. Bounded to one line so a description whose *body*

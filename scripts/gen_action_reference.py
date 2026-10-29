@@ -40,6 +40,7 @@ TARGET_SUMMARY = {
     "cloudflare-workers": "Deploy a Worker and its static assets with Wrangler",
     "azure-functions-zip": "Publish a zip to an Azure Function App, then wait for it to answer",
     "azure-apim-policy": "Publish policy documents to an API Management API, all or nothing",
+    "gitops-pr": "Open a deploy PR per kustomize overlay, the next when one merges",
 }
 
 _missing = set(TARGETS) - set(TARGET_SUMMARY)
@@ -93,6 +94,10 @@ PERMISSIONS = {
         ("contents: read", "checkout"),
         ("id-token: write", "sign in to Azure by OIDC"),
         ("pull-requests: write", "the sticky preview comment"),
+    ],
+    "gitops-pr": [
+        ("contents: read", "deploys: an App token in auth-token opens the deploy PRs"),
+        ("pull-requests: write", "preview claims with GITHUB_TOKEN: the labels and comments"),
     ],
 }
 

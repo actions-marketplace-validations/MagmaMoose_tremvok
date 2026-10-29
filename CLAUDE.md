@@ -1,8 +1,8 @@
 # Tremvok
 
-A published Marketplace action: one composite action, nine targets (`github-pages`,
+A published Marketplace action: one composite action, ten targets (`github-pages`,
 `s3-cloudfront`, `lambda-zip`, `terragrunt`, `ansible`, `cloudflare-workers`, `cloudflare-docs`,
-`azure-functions-zip`, `azure-apim-policy`), plus an optional FastAPI deployment-record service on Lambda. Consumers pin `@v2` and a broken release breaks
+`azure-functions-zip`, `azure-apim-policy`, `gitops-pr`), plus an optional FastAPI deployment-record service on Lambda. Consumers pin `@v2` and a broken release breaks
 their deploys, so the action's input contract is the thing to be careful with. Infrastructure is
 `terraform/`, provable on LocalStack.
 
@@ -14,7 +14,7 @@ file; edit the two together.
 
 ## Footguns — read `.claude/COMMON_MISTAKES.md` before debugging any of these
 
-Twenty-eight incidents, each with symptom, cause and fix. The clusters:
+Thirty incidents, each with symptom, cause and fix. The clusters:
 
 - **A script exits silently under `set -e`** — a false `[[ ]]` last in `$( )`, a helper that
   re-enables errexit, a loop ending on a false test, `cmd | tee`.
@@ -27,6 +27,8 @@ Twenty-eight incidents, each with symptom, cause and fix. The clusters:
   lock.
 - **A gate that reports the wrong thing** — a required check that never reports, an unreadable
   review list read as "nobody approved".
+- **A green apply that took everything down** — an approved VM resize power-cycled every node at
+  once; `terragrunt-rolling`, and why `-target` alone does not isolate a node.
 - **An AWS call that does something other than what it says** — `sync --delete` on an empty
   build, `--value https://…` fetching the URL, an IAM grant that was never needed, `docker
   compose` missing where `docker` is present.

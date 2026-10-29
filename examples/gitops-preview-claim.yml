@@ -1,0 +1,40 @@
+name: Preview claims
+
+# One open pull request per preview label. Flux Operator deploys the open pull request that
+# carries a label to that label's environment (a ResourceSetInputProvider of type
+# GitHubPullRequest, `filter.labels: [deploy/preview-1]`, `filter.limit: 1`), and when two carry
+# it, it takes the newest without a word. Here the first pull request to take a label holds it,
+# and one that takes it later loses the label again, with a comment naming the holder. This
+# workflow deploys nothing: the controller does.
+on:
+  pull_request:
+    types: [labeled, unlabeled, closed]
+
+# Taking a refused label off and commenting is all it does. An App token in auth-token works
+# too, but GITHUB_TOKEN with this grant is enough.
+permissions:
+  contents: read
+  pull-requests: write
+
+# One queue per label, so two claims on a label are settled one after the other. A closed event
+# carries no label, so it queues per pull request. `queue: max` keeps every waiting run: by
+# default a third event for a label cancels the run that was waiting.
+concurrency:
+  group: preview-claim-${{ github.event.label.name || github.event.pull_request.number }}
+  queue: max
+
+jobs:
+  claim:
+    runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: MagmaMoose/tremvok@v2  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          target: gitops-pr
+          # One per line, each with its own ResourceSetInputProvider on the cluster.
+          gitops-preview-labels: |
+            deploy/preview-1
+            deploy/preview-2
+          # Optional: the holder's comment links its environment.
+          gitops-preview-urls: |
+            {"deploy/preview-1": "https://preview-1.example.com",
+             "deploy/preview-2": "https://preview-2.example.com"}

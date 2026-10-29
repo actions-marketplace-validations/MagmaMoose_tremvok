@@ -2,8 +2,8 @@
 
 <!-- sources: action.yml -->
 
-v1 is the docs-only action. v2 is one action covering six targets, so the input surface had
-to grow a selector and the docs inputs had to move out of the way of it.
+v1 is the docs-only action. v2 is one action covering multiple deployment targets, so the input
+surface had to grow a selector and the docs inputs had to move out of the way of it.
 
 **`@v1` is frozen at v1.0.18 and keeps working.** It is not deprecated by this. Migrate
 when you want another target, or when you want the input validation.
@@ -39,7 +39,7 @@ the collision that forced a major:
 
 The docs target is now named for the one place it publishes, so `target` says both things at
 once and there is no second destination input under it. Every other docs input gained a
-`pages-` prefix: with six targets in one action, a bare `toolchain` or `strict` cannot say
+`pages-` prefix: with multiple targets in one action, a bare `toolchain` or `strict` cannot say
 whose it is. The prefix is also what the validator keys on, so a misplaced input is caught
 rather than ignored.
 

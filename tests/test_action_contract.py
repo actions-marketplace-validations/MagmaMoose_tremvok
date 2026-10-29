@@ -185,3 +185,20 @@ def test_the_cloud_logins_are_gated_on_their_input_and_not_on_a_target(step_name
         f"{gating_input} does not apply to terragrunt in input-targets.json, so "
         f"validate-inputs.sh refuses it there"
     )
+
+
+def test_preview_claims_run_on_a_pull_request_only():
+    """gitops-preview-labels takes labels off pull requests. A release or a push run that did
+    it too would be settling claims with no pull request event to read, on a run that deploys."""
+    step = next((s for s in STEPS if s.get("id") == "preview-claim"), None)
+    assert step is not None, "the preview-claim step is gone"
+    condition = step.get("if", "")
+    assert "steps.resolve.outputs.mode == 'preview'" in condition
+    assert "inputs.gitops-preview-labels != ''" in condition
+
+
+def test_a_preview_claim_run_gets_no_deploy_summary_comment():
+    """A claim keeps its own comment per label. The deploy summary on top of it would report a
+    "preview" of gitops-pr on every label event, for a run that deployed nothing."""
+    step = next(s for s in STEPS if s.get("name") == "Notify, sticky pull-request comment")
+    assert "inputs.gitops-preview-labels == ''" in step.get("if", "")

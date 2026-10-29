@@ -8,7 +8,8 @@
     "ansible",
     "cloudflare-workers",
     "azure-functions-zip",
-    "azure-apim-policy"
+    "azure-apim-policy",
+    "gitops-pr"
   ],
   "inputs": {
     "mode": {
@@ -21,7 +22,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "auto"
     },
@@ -35,7 +37,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -49,7 +52,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "."
     },
@@ -63,7 +67,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "true"
     },
@@ -77,7 +82,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "false"
     },
@@ -346,6 +352,18 @@
         "terragrunt"
       ],
       "default": ""
+    },
+    "terragrunt-rolling": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": ""
+    },
+    "terragrunt-rolling-pause": {
+      "targets": [
+        "terragrunt"
+      ],
+      "default": "300"
     },
     "terragrunt-check-name": {
       "targets": [
@@ -743,6 +761,90 @@
       ],
       "default": "rawxml"
     },
+    "gitops-suite-images": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-suite-overlay": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-suite-repositories": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-suite-allowed-actors": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-suite-allow-downgrade": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": "false"
+    },
+    "gitops-overlays": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-images": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-tag": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-base": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-branch-prefix": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": "deploy"
+    },
+    "gitops-prereleases": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": "false"
+    },
+    "gitops-prereleases-until": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-preview-labels": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
+    "gitops-preview-urls": {
+      "targets": [
+        "gitops-pr"
+      ],
+      "default": ""
+    },
     "verify-url": {
       "targets": [
         "github-pages",
@@ -753,7 +855,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -767,7 +870,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -781,7 +885,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -795,7 +900,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "GET"
     },
@@ -809,7 +915,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "200"
     },
@@ -823,7 +930,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "6"
     },
@@ -837,7 +945,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "10"
     },
@@ -851,7 +960,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "always"
     },
@@ -865,7 +975,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "auto"
     },
@@ -879,7 +990,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -893,7 +1005,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -907,7 +1020,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": ""
     },
@@ -921,7 +1035,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "tremvok"
     },
@@ -935,7 +1050,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "${{ github.token }}"
     },
@@ -949,7 +1065,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "false"
     },
@@ -963,7 +1080,8 @@
         "ansible",
         "cloudflare-workers",
         "azure-functions-zip",
-        "azure-apim-policy"
+        "azure-apim-policy",
+        "gitops-pr"
       ],
       "default": "false"
     }

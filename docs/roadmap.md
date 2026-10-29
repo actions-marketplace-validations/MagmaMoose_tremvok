@@ -43,6 +43,24 @@ repo, it is wrong.
   the preview has its own URL and takes no production traffic. The Wrangler config keeps
   owning the asset directory, the routes and 404 handling. Refuses to publish an empty asset
   directory.
+- **`target: azure-functions-zip`**: publish a zip to an Azure Function App over OIDC, then
+  poll until it answers. Corroborates the exit code against `WEBSITE_RUN_FROM_PACKAGE` (the
+  CLI has been observed lying), refuses a package whose `functions.metadata` is not at the
+  root, and previews to a slot when one is configured.
+- **`target: azure-apim-policy`**: publish policy documents to an existing API Management
+  API over OIDC — `api.xml` to the API scope, one file per operation. Reads the current set
+  first, and if any document is refused by the gateway it puts every replaced scope back and
+  names the cause. Refuses a document named after an operation the API does not have.
+- **`target: gitops-pr`**: deploy a released image through the kustomize overlays a GitOps
+  controller applies, by pull request. A published release opens the deploy PR for the first
+  overlay; merging it opens exactly what it changed for the next, so a later environment only
+  gets a build the one before it ran. Only the `newTag` line changes, one open deploy PR per
+  overlay, and an overlay is never moved backwards.
+- **Preview claims for label-driven preview controllers** (`gitops-pr`,
+  `gitops-preview-labels`): one open pull request per preview label. The first pull request to
+  take a label holds it; one that takes it later loses the label again and is told which pull
+  request holds it, so a controller with `filter.limit: 1` never switches environments
+  silently. Deploys nothing itself.
 - **Post-deploy verification**, **notifications** (sticky pull-request comment, Slack,
   Teams), and the **deployment-record API**.
 
@@ -87,4 +105,4 @@ README, a roadmap and a repository description that each described a different p
 - **Building your app.** The build is legitimately per-product. Tremvok picks up at "the
   artifact exists".
 - **Reconciling GitOps.** Where a service is deployed by a cluster-side reconciler,
-  Tremvok's job is to report and verify, not to apply.
+  Tremvok's job is to propose the change (`gitops-pr`), report and verify, not to apply.

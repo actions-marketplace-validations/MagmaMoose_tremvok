@@ -21,8 +21,9 @@ holding its default changes nothing, so the blind spot is harmless.
 
 ### `unknown target '<value>'`
 
-`target` accepts `github-pages`, `s3-cloudfront`, `lambda-zip`, `terragrunt`, `ansible` or
-`cloudflare-workers`. The message lists them. There's no default, on purpose: guessing
+`target` accepts `github-pages`, `cloudflare-docs`, `cloudflare-workers`, `s3-cloudfront`,
+`lambda-zip`, `terragrunt`, `ansible`, `azure-functions-zip`, `azure-apim-policy` or
+`gitops-pr`. The message lists them. There's no default, on purpose: guessing
 `github-pages` would silently build a site for someone who meant to deploy a Lambda.
 
 ### `Tremvok skipped: this pull request comes from a fork`
@@ -536,6 +537,75 @@ that the file does not already serve.
 A warning, not an error. You didn't supply `ansible-ssh-known-hosts`. It's a real downgrade, so
 it's said out loud rather than defaulted quietly. Supply the entries for anything reachable from
 a network you don't control.
+
+## `target: gitops-pr`
+
+### `gitops-pr needs yq (mikefarah/yq v4) on the runner`
+
+`yq` reads the kustomization files. GitHub's hosted runners have it; a self-hosted runner
+needs it installed separately.
+
+### `gitops-pr has no rollback of its own`
+
+The full message: "revert the deploy PR's merge, which goes through review like the deploy
+did." `mode: rollback` is accepted and refused immediately. The correct procedure is a plain
+git revert of the deploy PR merge commit, opened as a pull request and merged the same way.
+
+### `gitops-pr runs on a published release, on a push... this run is a '<event>' event`
+
+The workflow trigger is wrong. `target: gitops-pr` runs on `release: [published]` for initial
+deploys, on `push` to the base branch for promotions (when a deploy PR merges), or with
+`gitops-tag` set for a manual dispatch. Any other event trigger hits this refusal.
+
+### `gitops-overlays names no overlay` / `gitops-images names no image`
+
+Both inputs are required. An empty `gitops-overlays` or `gitops-images` fails the run before
+any API call.
+
+### `gitops-images: '<image>' carries a tag or digest; name the repository only`
+
+`gitops-images` lists the image repositories without a tag. The tag is what a deploy sets.
+Remove the `:tag` or `@sha256:...` suffix.
+
+### `gitops-overlays: more than one overlay is called '<name>'`
+
+The overlay name is the last path segment, and it becomes part of the deploy PR branch
+(`deploy/<name>/<tag>`). Two overlays that share a name produce branches that collide. Rename
+one of the overlay directories.
+
+### `gitops-pr: <file> has an images[] entry for none of: <images>`
+
+The kustomization in that overlay has no `images:` entry for any of the images listed in
+`gitops-images`. Either the overlay doesn't deploy those images (check `gitops-overlays`), or
+the image repository names in `gitops-images` don't match the `name` or `newName` in the
+kustomization.
+
+### `gitops-pr: could not tell which pull request <sha> came from`
+
+On a push to the base branch, the run resolves the deploy PR that was merged. This fails when
+the GitHub API returns nothing for that commit or the token lacks `pull-requests: read`. The
+run stops without applying anything.
+
+### `gitops-prereleases-until: '<value>' is not one of gitops-overlays`
+
+The value must be the name of one of the overlays listed in `gitops-overlays`. It can't be the
+last overlay: a stable release whose candidate runs there needs somewhere to go next.
+
+### `gitops-preview-urls must be a JSON object from label to URL`
+
+`gitops-preview-urls` must be valid JSON and every value must be a string. Check the quoting
+in the workflow. Single-line JSON works: `{"deploy/preview-1": "https://preview-1.example.com"}`.
+
+### `gitops-preview-urls: <key> is not one of gitops-preview-labels`
+
+Every key in `gitops-preview-urls` must match a label listed in `gitops-preview-labels`. Remove
+the extra key or add the label.
+
+### `gitops-preview-labels: could not take <label> off #<n>`
+
+This one fails the run (unlike a comment failure, which only warns). The token needs
+`pull-requests: write`. Check the permission block and that the token isn't from a fork, which
+can't write.
 
 ## The API
 

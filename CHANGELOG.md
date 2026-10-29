@@ -9,6 +9,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Preview claims on `gitops-pr`**: `gitops-preview-labels` keeps each preview label to one
+  open pull request, for a controller that deploys the pull request carrying a label (Flux
+  Operator's `GitHubPullRequest` input provider with `filter.labels` and `filter.limit: 1`,
+  which takes the newest of two silently). On `pull_request` `labeled`, the first pull request
+  to take the label holds it, ranked by its issue events; one that takes it later loses the
+  label again and gets a comment naming the holder, and the run is still green. Taking the
+  label off or closing the pull request releases it, and closing also takes the label off, so
+  a reopened pull request does not take the environment back. `gitops-preview-urls` puts each
+  environment's URL in the holder's comment, and the `gitops-preview-result` output says
+  `claimed`, `refused`, `released` or `ignored`. It deploys nothing, and needs only
+  `pull-requests: write`. `examples/gitops-preview-claim.yml` is the workflow.
+
+- **`terragrunt-rolling`**: apply a stack one unit at a time. Each line names a stack glob and
+  the `for_each` or `count` blocks whose instances are units (`*/k3s-cluster  module.node`). When
+  the plan to be applied changes two or more units, each is planned and applied on its own with
+  `-target`, `terragrunt-rolling-pause` seconds apart (300 by default), and a final full plan
+  applies the rest and proves every unit landed. A unit whose plan would also change another unit
+  is refused before any of it is applied. For changes that restart what they touch: an approved
+  resize of a cluster's worker VMs power-cycled every worker at once and took the cluster down.
+
+- **`target: gitops-pr`**: deploy a released image through the kustomize overlays a GitOps
+  controller applies, by pull request, one overlay at a time. A published release opens a deploy
+  PR moving the `newTag` of each image in `gitops-images` in the first of `gitops-overlays`;
+  merging it opens exactly what it changed for the next, so a later environment only ever gets a
+  build the one before it ran. One open deploy PR per overlay (a newer tag supersedes it), an
+  overlay is never moved backwards, and only the tag line changes, so a Flux `$imagepolicy`
+  marker survives. New inputs `gitops-overlays`, `gitops-images`, `gitops-tag`, `gitops-base`,
+  `gitops-branch-prefix` and `gitops-prereleases`, and a `gitops-result` output; `url` and
+  `version-id` carry the deploy PR and its tag.
+
 - **`target: azure-apim-policy`**: publish a directory of policy documents (`api.xml` for the API
   scope, `<operation-id>.xml` per operation) into an Azure API Management API that already
   exists. All or nothing: API Management compiles a policy only when it is published, so the
@@ -288,6 +318,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     has no deployment slots, so there is no destination that does not take production traffic.
 
 ### Fixed
+
+- **A change inside an excluded stack no longer plans the stacks beside it.** A stack named in
+  `terragrunt-exclude` is applied by hand, but an edit inside it walked past it, found no
+  enclosing stack, and was widened to its siblings as if it were shared configuration. On a live
+  estate an edit to a hand-applied firewall stack planned the k3s cluster beside it, resizing its
+  VMs back to the base branch's values, and an approval would have applied that. A stack excluded
+  by its own directory name now owns everything inside it, deleted or not; a module edit still
+  widens. The setup guide no longer says a module change maps to nothing.
 
 - **A large Terragrunt plan comment was never posted.** `notify-pr.sh` handed the whole request
   to `curl` as one argument, and a plan across many stacks is past the kernel's 128 KiB cap on a

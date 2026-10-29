@@ -106,3 +106,51 @@ tremvok::slug() {
     | sed -E 's/-+/-/g; s/^-+//; s/-+$//')"
   printf '%s' "$(printf '%s' "$raw" | cut -c1-60)"
 }
+
+# Is tag $1 newer than tag $2? SemVer precedence when both end in MAJOR.MINOR.PATCH with an
+# optional -PRERELEASE and share the prefix before it (`v`, `core-v`): 1.2.3 is newer than
+# 1.2.3-rc.1, rc.10 is newer than rc.9, and a numeric identifier ranks below an alphanumeric
+# one. Anything else falls back to `sort -V`.
+#
+# `sort -V` alone gets the one comparison a promotion makes backwards: it puts 1.2.3 BEFORE
+# 1.2.3-rc.1. An overlay running a release candidate would then refuse the candidate's own
+# stable release as a downgrade.
+tremvok::version_gt() {
+  local a="${1-}" b="${2-}"
+  [[ "$a" != "$b" ]] || return 1
+  local core='([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z.-]+))?$'
+  local pa pb a1 a2 a3 apre b1 b2 b3 bpre
+  if [[ "$a" =~ $core ]]; then
+    pa="${a%"${BASH_REMATCH[0]}"}"; a1="${BASH_REMATCH[1]}"; a2="${BASH_REMATCH[2]}"
+    a3="${BASH_REMATCH[3]}"; apre="${BASH_REMATCH[5]}"
+    if [[ "$b" =~ $core ]]; then
+      pb="${b%"${BASH_REMATCH[0]}"}"; b1="${BASH_REMATCH[1]}"; b2="${BASH_REMATCH[2]}"
+      b3="${BASH_REMATCH[3]}"; bpre="${BASH_REMATCH[5]}"
+      if [[ "$pa" == "$pb" ]]; then
+        if ((10#$a1 != 10#$b1)); then ((10#$a1 > 10#$b1)); return; fi
+        if ((10#$a2 != 10#$b2)); then ((10#$a2 > 10#$b2)); return; fi
+        if ((10#$a3 != 10#$b3)); then ((10#$a3 > 10#$b3)); return; fi
+        # Same version: a release outranks its own prereleases.
+        if [[ -z "$apre" && -z "$bpre" ]]; then return 1; fi
+        if [[ -z "$apre" ]]; then return 0; fi
+        if [[ -z "$bpre" ]]; then return 1; fi
+        local IFS=. LC_ALL=C i x y
+        local -a ia ib
+        read -r -a ia <<<"$apre"
+        read -r -a ib <<<"$bpre"
+        for ((i = 0; ; i++)); do
+          if ((i >= ${#ia[@]} && i >= ${#ib[@]})); then return 1; fi
+          if ((i >= ${#ia[@]})); then return 1; fi
+          if ((i >= ${#ib[@]})); then return 0; fi
+          x="${ia[$i]}"; y="${ib[$i]}"
+          [[ "$x" != "$y" ]] || continue
+          if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then ((10#$x > 10#$y)); return; fi
+          if [[ "$x" =~ ^[0-9]+$ ]]; then return 1; fi
+          if [[ "$y" =~ ^[0-9]+$ ]]; then return 0; fi
+          [[ "$x" > "$y" ]]; return
+        done
+      fi
+    fi
+  fi
+  [[ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -n 1)" == "$a" ]]
+}

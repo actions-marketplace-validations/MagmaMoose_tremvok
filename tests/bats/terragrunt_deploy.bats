@@ -25,6 +25,7 @@ setup() {
 #!/usr/bin/env bash
 printf 'terragrunt %s (cwd=%s)\n' "$*" "${PWD##*/}" >>"${STUB_LOG}"
 printf '%s ARM_ACCESS_KEY=%s\n' "$1" "${ARM_ACCESS_KEY:-<unset>}" >>"${STUB_LOG}.env"
+printf '%s TG_ROLLING=%s\n' "$1" "${TG_ROLLING:-<unset>}" >>"${STUB_LOG}.env"
 case "$1" in
   init) exit 0 ;;
   plan) printf 'Plan: 1 to add, 0 to change, 0 to destroy.\n'; exit "${PLAN_EXIT:-2}" ;;
@@ -940,4 +941,79 @@ STUBEOF
   [ "$status" -eq 0 ]
   [ "$(grep -c 'terragrunt plan ' "$STUB_LOG")" -eq 3 ]
   [ "$(grep 'terragrunt plan ' "$STUB_LOG" | grep -c -- '-lock=false')" -eq 3 ]
+}
+
+# ── terragrunt-rolling ───────────────────────────────────────────────────────────────────
+# The apply decides whether to roll; this only has to hand each stack the right addresses, and
+# refuse a line that could never roll before anything is planned, because a rolling line that
+# silently does nothing applies the stack in one go, which is the outage it was written for.
+
+@test "a rolling line reaches the apply of the stacks its glob matches" {
+  approved
+  ROLLING=$'*/prod/*  module.node  vcd_independent_disk.data' PR_NUMBER=42 \
+    EVENT_NAME=pull_request_review REVIEW_STATE=approved \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q '^apply TG_ROLLING=module.node vcd_independent_disk.data$' "${STUB_LOG}.env"
+}
+
+@test "a stack no rolling line matches applies in one go" {
+  approved
+  ROLLING=$'*/staging/*  module.node' PR_NUMBER=42 \
+    EVENT_NAME=pull_request_review REVIEW_STATE=approved \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q '^apply TG_ROLLING=<unset>$' "${STUB_LOG}.env"
+}
+
+@test "first rolling line wins, so order is the contract" {
+  approved
+  ROLLING=$'*/prod/*  module.node\n*  module.other' PR_NUMBER=42 \
+    EVENT_NAME=pull_request_review REVIEW_STATE=approved \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q '^apply TG_ROLLING=module.node$' "${STUB_LOG}.env"
+}
+
+@test "a rolling line with no address is refused before anything is planned" {
+  ROLLING=$'*/prod/*' run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"names no address"* ]]
+  refute grep -q 'terragrunt plan' "$STUB_LOG"
+}
+
+@test "a rolling address that names an instance rather than its block is refused" {
+  ROLLING=$'*/prod/*  module.node["a"]' run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"names an instance"* ]]
+}
+
+@test "a rolling address that is not an address is refused" {
+  ROLLING=$'*/prod/*  node' run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not a module or resource address"* ]]
+}
+
+@test "a rolling pause that is not a whole number of seconds is refused" {
+  ROLLING_PAUSE=10m run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"terragrunt-rolling-pause must be a whole number of seconds"* ]]
+}
+
+@test "the rolling pause reaches the apply" {
+  approved
+  stub_script terragrunt <<'STUBEOF'
+#!/usr/bin/env bash
+printf 'terragrunt %s\n' "$*" >>"${STUB_LOG}"
+printf '%s TG_ROLLING_PAUSE=%s\n' "$1" "${TG_ROLLING_PAUSE:-<unset>}" >>"${STUB_LOG}.env"
+case "$1" in
+  plan) exit 2 ;;
+esac
+exit 0
+STUBEOF
+  ROLLING=$'*/prod/*  module.node' ROLLING_PAUSE=900 PR_NUMBER=42 \
+    EVENT_NAME=pull_request_review REVIEW_STATE=approved \
+    run bash "${SCRIPTS}/deploy-terragrunt.sh"
+  [ "$status" -eq 0 ]
+  grep -q '^apply TG_ROLLING_PAUSE=900$' "${STUB_LOG}.env"
 }

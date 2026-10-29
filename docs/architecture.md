@@ -25,12 +25,12 @@ GitHub Actions runner
                                           └─► Slack / Teams
 ```
 
-## One action, six targets
+## One action, ten targets
 
 `target` selects the adapter; everything before and after it is shared. The parts that are
 not target-specific, resolving the mode from the event, the honest skip, verification, the
 outcome, the three notification sinks, are written once and every target gets them, which
-is the argument for one action rather than six.
+is the argument for one action rather than ten.
 
 The cost of a target enum is that a caller can pass an input belonging to a different
 target. Silently ignoring it is what would make the Marketplace listing dishonest, so

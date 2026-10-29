@@ -56,6 +56,11 @@ APPLY_OPERATORS="${APPLY_OPERATORS:-}"
 # different account (a deliberate blast-radius boundary, not an accident) cannot be planned
 # with one credential, and without this the choice is one job per credential class.
 STACK_ENV="${STACK_ENV:-}"
+# Stacks applied one unit at a time. One `<glob> <address> [<address> ...]` per line, first
+# match wins; each address names a for_each or count block, and each of its instances is a unit.
+# See the rolling apply in terragrunt-run.sh.
+ROLLING="${ROLLING:-}"
+ROLLING_PAUSE="${ROLLING_PAUSE:-300}"
 # auto | warn | off. See terragrunt-credentials.sh. `auto` fails the run, and that is the
 # default because the failure it replaces costs a full plan cycle across every stack to say
 # less than this does in one line.
@@ -173,6 +178,54 @@ stack_env_for() { # stack
   done <<<"$STACK_ENV"
 }
 
+# Refused at the start, before anything is planned: a rolling line that cannot work would only
+# show up as a stack that applied in one go, which is the outage it was written to prevent.
+validate_rolling() {
+  local line pattern address index=0 addresses=()
+  case "$ROLLING_PAUSE" in
+    '' | *[!0-9]*) tremvok::fail "terragrunt-rolling-pause must be a whole number of seconds (got '${ROLLING_PAUSE}')" ;;
+  esac
+  [[ -n "$ROLLING" ]] || return 0
+  while IFS= read -r line; do
+    index=$(( index + 1 ))
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -n "$line" && "$line" != '#'* ]] || continue
+    pattern="${line%%[[:space:]]*}"
+    # `read -a`, not an unquoted expansion: an address can hold a `[`, which would glob.
+    read -r -a addresses <<<"${line#"$pattern"}"
+    (( ${#addresses[@]} > 0 )) \
+      || tremvok::fail "terragrunt-rolling line ${index} ('${pattern}') names no address. Give the for_each or count block whose instances are applied one at a time, such as module.node."
+    for address in "${addresses[@]}"; do
+      case "$address" in
+        *']')
+          tremvok::fail "terragrunt-rolling line ${index}: '${address}' names an instance. Name the block instead (module.node, not module.node[\"a\"]); each of its instances is a unit." ;;
+        *.*) ;;
+        *)
+          tremvok::fail "terragrunt-rolling line ${index}: '${address}' is not a module or resource address, such as module.node or vcd_vm.node." ;;
+      esac
+    done
+  done <<<"$ROLLING"
+}
+
+# The addresses of the first terragrunt-rolling line whose glob matches the stack, on one line.
+rolling_for() { # stack
+  local stack="$1" line pattern addresses=()
+  [[ -n "$ROLLING" ]] || return 0
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -n "$line" && "$line" != '#'* ]] || continue
+    pattern="${line%%[[:space:]]*}"
+    # shellcheck disable=SC2254  # the pattern is data on purpose: it is a glob from input
+    case "$stack" in
+      $pattern) ;;
+      *) continue ;;
+    esac
+    read -r -a addresses <<<"${line#"$pattern"}"
+    printf '%s\n' "${addresses[*]}"
+    return 0
+  done <<<"$ROLLING"
+}
+
 sanitize() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-' | sed -E 's/-+/-/g; s/-$//'; }
 
 # `sed 's/^./\U&/'` is a GNU extension that BSD sed (macOS) silently does not apply, so the
@@ -194,6 +247,7 @@ plain_text() { # [file]
 }
 
 validate_stack_env
+validate_rolling
 
 # ── which stacks ─────────────────────────────────────────────────────────────────────────
 scope="$SCOPE"
@@ -765,6 +819,7 @@ if [[ "$may_apply" == true ]]; then
       done < <(stack_env_for "$stack")
       env ${stack_env[@]+"${stack_env[@]}"} \
         PLAN_DIR="${WORK_DIR}/plan/$(sanitize "$stack")" \
+        TG_ROLLING="$(rolling_for "$stack")" TG_ROLLING_PAUSE="$ROLLING_PAUSE" \
         "${here}/terragrunt-run.sh" apply "$stack" "$out"
       code=$?
       set -e

@@ -351,7 +351,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - run: npm run build                       # your build, not Tremvok's
       - uses: MagmaMoose/tremvok@v2
         with:
@@ -432,7 +432,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - uses: actions/setup-dotnet@v6
         with: { dotnet-version: '9.0.x' }
       - run: dotnet publish -c Release -f net9.0 -o publish
@@ -511,7 +511,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - uses: MagmaMoose/tremvok@v2
         with:
           target: azure-apim-policy
@@ -556,6 +556,177 @@ POST answers a GET with `404` whatever its policy says.
 **A pull request publishes nothing.** A policy's only destination that takes no production
 traffic is an API revision, which this target does not create. A preview checks the documents
 and stops, saying so.
+
+### `gitops-pr`
+
+For a service a GitOps controller deploys: Flux or Argo CD applies a kustomize overlay from
+Git, and what changes an environment is a commit to that overlay. This target makes that
+commit a pull request, one environment at a time, instead of letting image automation push
+tags to the branch the cluster reads.
+
+```yaml
+on:
+  release: { types: [published] }
+  push:
+    branches: [main]
+    paths: ['k8s/overlays/acc/**', 'k8s/overlays/prd/**']
+
+permissions: { contents: read }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.DEPLOY_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_APP_PRIVATE_KEY }}
+      - uses: MagmaMoose/tremvok@v2
+        with:
+          target: gitops-pr
+          mode: deploy
+          gitops-overlays: |
+            k8s/overlays/acc
+            k8s/overlays/prd
+          gitops-images: ghcr.io/acme/app
+          auth-token: ${{ steps.app-token.outputs.token }}
+```
+
+**A release opens the first pull request; a merge opens the next.** On `release: published`
+it moves every image in `gitops-images` to the release's tag in the first overlay, on a branch
+of its own (`deploy/acc/v1.2.3`), and opens a pull request. When that merges, the push starts
+the workflow again: the target finds the merged pull request, reads what it changed in the
+`acc` overlay, and opens exactly that for `prd`. So `prd` only ever gets a build `acc` ran, and
+a tag a reviewer changed on the branch is the one that travels. Prereleases are skipped unless
+`gitops-prereleases: true`, and `gitops-tag` deploys a tag by hand from `workflow_dispatch`.
+
+**An App token, not GITHUB_TOKEN.** A pull request opened with GITHUB_TOKEN starts no workflow,
+so its required checks never report and it can never merge. The App needs contents and pull
+requests write. Its commits are made through the contents API, so they are signed, which a
+signed-commits rule on the base branch requires.
+
+**Only the tag line changes.** The value on each entry's `newTag:` line is rewritten and
+nothing else, so a Flux `# {"$imagepolicy": ...}` marker, comments and blank lines survive and
+the diff is one line per image. An entry is matched by `newName` where it has one, otherwise
+`name`. A digest-pinned entry, one with no `newTag`, and a flow-style entry are refused rather
+than half-edited.
+
+**One open deploy PR per overlay.** A newer tag supersedes the open one (closed, branch
+deleted), a re-run refreshes it, an overlay that already runs the tag gets none, and an overlay
+is never moved backwards: if `prd` runs something newer, or a pull request for a newer tag is
+already open, nothing is opened.
+
+**Release candidates.** With `gitops-prereleases: true` a prerelease travels every overlay
+like a stable release. `gitops-prereleases-until: acc` stops it at acc instead. When the
+candidate is signed off and released as its stable version (Diatreme's `promote-from` releases
+`v1.4.0-rc.2` as `v1.4.0`, the same image), the stable release finds acc already running its
+candidate and opens the deploy PR for prd directly, so production runs `v1.4.0` and acc is not
+deployed twice. A stable release whose candidate acc does not run starts at acc as usual, so prd
+only ever gets what acc ran. Tags compare by SemVer: `v1.4.0` is newer than `v1.4.0-rc.2`.
+
+**Turn the image automation off first.** An `ImageUpdateAutomation` writing the same overlay
+commits the tag to the branch and leaves the deploy PR with nothing in it. And if the
+repository's release workflow also runs on push, give it `paths-ignore` for the overlays:
+merging a deploy PR must not cut a release. Diatreme's `deploy-paths` refuses such a release
+before it tags anything, and skips the image build on a pull request that only moves tags.
+
+**Set `mode: deploy`.** `auto` reads a push to anything but the default branch as a mistake,
+and the overlays' branch is often not the default one (`gitops-base: master` in a repository
+whose default is `dev`).
+
+**Verify on the merge, not on the pull request.** Opening a pull request deploys nothing, so
+there is nothing to request yet. The run a merge starts is the one where `verify-url` can ask
+the environment it deployed to. A pull request run deploys nothing and says so.
+
+#### Preview environments by label
+
+Flux Operator runs one preview environment per label: a `ResourceSetInputProvider` of type
+`GitHubPullRequest` with `filter.labels` and `filter.limit: 1` hands a `ResourceSet` the open
+pull request carrying the label, and the environment follows it. When two open pull requests
+carry the label it takes the newest and says nothing, so a second pull request takes the
+environment from the first without either author knowing. `gitops-preview-labels` makes each
+label a claim: the first pull request to take it holds it, and one that takes it later loses
+the label again, with a comment naming the holder.
+
+```yaml
+on:
+  pull_request:
+    types: [labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-claim-${{ github.event.label.name || github.event.pull_request.number }}
+  queue: max
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: MagmaMoose/tremvok@v2
+        with:
+          target: gitops-pr
+          gitops-preview-labels: |
+            deploy/preview-1
+            deploy/preview-2
+          gitops-preview-urls: |
+            {"deploy/preview-1": "https://preview-1.example.com",
+             "deploy/preview-2": "https://preview-2.example.com"}
+```
+
+And on the cluster, one provider per label:
+
+```yaml
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSetInputProvider
+metadata:
+  name: app-preview-1
+  namespace: app-preview
+spec:
+  type: GitHubPullRequest
+  url: https://github.com/org/app
+  secretRef:
+    name: github-auth
+  filter:
+    labels: ['deploy/preview-1']
+    limit: 1
+```
+
+**The first label on wins.** Every open pull request carrying the label is a claim, ranked by
+when its label last went on, from its issue events. The holder gets a comment saying it holds
+the environment, with its URL when `gitops-preview-urls` names one. Every other claim loses
+the label and gets a comment: *deploy/preview-1 is in use by #12. Remove it there first.* Two
+pull requests labelled at once end the same way in both runs, because both read the same
+events. The controller reads the pull requests on its own schedule
+(`fluxcd.controlplane.io/reconcileEvery`, ten minutes by default), so a refused label is
+normally gone before it looks.
+
+**Each run settles the whole label**, not only its own pull request, so a run that never
+happened leaves nothing unsettled for the next one. The concurrency group runs a label's
+events one after another; `queue: max` keeps every waiting run, where the default lets a third
+event cancel the one waiting. A `closed` event carries no label, so it queues per pull request.
+
+**Taking the label off, or closing the pull request, releases it.** The holder's comment then
+says the environment was released. Closing also takes the label off, so a pull request reopened
+later does not take the environment back: label it again.
+
+**A refused claim is a green run.** The job did what it is for. `gitops-preview-result` says
+what became of this pull request's claim: `claimed`, `refused`, `released` or `ignored`. A
+comment that cannot be posted only warns; a label that cannot be taken off fails the run,
+because the controller would still deploy that pull request.
+
+**`pull-requests: write` is the whole grant.** The open pull requests are listed through the
+pulls API, so GITHUB_TOKEN with that permission will do. An App token works too; a label it
+takes off starts the workflow again, and that run reads the comment, sees the pull request
+never held the label, and changes nothing.
+
+**Nothing is deployed.** The controller deploys; the run only takes labels off and comments,
+as any gitops-pr pull request run deploys nothing. A pull request from a fork is skipped like
+every fork run, because its token cannot write. `dry-run: true` reports what it would do and
+writes nothing.
 
 ### `s3-cloudfront` and `lambda-zip`
 
@@ -674,14 +845,77 @@ files decide which of them run:
 | A file inside a stack | that stack, however deep the file sits inside it |
 | A file above the stacks, such as a shared `root.hcl` | every stack beneath that file's own directory, because every one of them includes it through `find_in_parent_folders` |
 | A file directly in `terragrunt-root` | every stack, for the same reason |
-| A file under `modules/` (or anything in `terragrunt-exclude`) | none |
+| A file under `modules/` (or another excluded directory of shared code) | every stack beneath the nearest directory above it that holds any |
+| A file inside a stack named in `terragrunt-exclude` | none: that stack is applied by hand, and it owns everything inside it |
 | A file outside `terragrunt-root` | none |
 
-A module maps to nothing on purpose: it has no state of its own, and guessing which stacks use
-it from its path is how a small module tidy-up ends up planning the whole estate. The
-scheduled drift run covers it. Everything above is per changed path and the results are
-merged, so one pull request that edits a shared root and one stack plans that whole subtree
-once.
+A module widens on purpose. Which stacks use it cannot be known without evaluating the HCL, and
+the narrow answer, nothing, publishes a green "No Terraform stacks affected" while the change
+lands unplanned. Planning is read-only and a stack the module does not reach plans clean, so the
+wide answer costs time, not correctness. It stops at the first directory above the module that
+holds stacks, so `terraform/eurofiber/_modules/x` never plans `terraform/azure`.
+
+A stack you exclude by name, `edge-gateway-firewall` in `terragrunt-exclude` for a directory of
+that name, is the opposite case. A change inside it is not shared configuration: it belongs to a
+stack the pipeline must not touch, so it plans nothing at all, rather than being widened to the
+stacks beside it and applied from the pull request's base on approval. A directory excluded only
+because it sits under an excluded one (`modules/x`) is still shared code.
+
+Everything above is per changed path and the results are merged, so one pull request that edits
+a shared root and one stack plans that whole subtree once.
+
+#### Rolling a change through a cluster, one node at a time
+
+A plan is applied in one go, and for most stacks that is what you want. It is not what you want
+when the change restarts what it touches. Resizing a cluster's VMs is the case that wrote this:
+the provider powers each VM off to change its CPU count, one apply of the whole plan does that to
+every node at the same moment, and the cluster, with everything on it, goes down with them.
+
+`terragrunt-rolling` names the stacks to roll and, for each, the `for_each` or `count` blocks
+whose instances are the units:
+
+```yaml
+with:
+  target: terragrunt
+  terragrunt-rolling: |
+    */k3s-cluster  module.node  vcd_independent_disk.longhorn
+  terragrunt-rolling-pause: '600'
+```
+
+When the plan to be applied changes two or more units, the apply:
+
+1. takes the units in plan order, and plans each on its own, with a `-target` for its key under
+   every listed address (`module.node["worker-0"]` and `vcd_independent_disk.longhorn["worker-0"]`);
+2. refuses that plan, before any of it is applied, when it changes another unit;
+3. applies it, then waits `terragrunt-rolling-pause` seconds (300 by default) before planning the
+   next unit, so the last one is back before another goes down;
+4. ends with a full plan, which applies whatever no unit holds (a shared network, say) and proves
+   every unit landed.
+
+A plan that changes one unit, or none, applies the saved plan exactly as before.
+
+**List every per-unit block, not just the main one.** tofu plans every instance of a resource a
+target depends on, unless that resource is itself targeted: a node targeted as `module.node["cp"]`
+alone pulls in every other node's disk resize, and that is the outage again. Instances of listed
+addresses that share a key are one unit, so a node and its disk roll together, and a unit is
+targeted under every listed address even where it has no instance (a control-plane node with no
+data disk), because a target that names nothing still keeps the other instances out. A change
+outside every unit that is keyed like another unit, `disk["worker-1"]` in `worker-0`'s plan, is
+taken for a per-unit block nobody listed, and refused.
+
+What it costs:
+
+- **Time.** The run waits the pause before every unit after the first: ten minutes over six nodes
+  is fifty minutes. `terragrunt-timeout` is per command, so it does not cut a long roll short,
+  but the job's own `timeout-minutes` has to allow for it.
+- **What lands is not the saved plan.** A plan file cannot be applied in part, so each unit is
+  planned again, on its own, just before it is applied. The saved plan decides which units roll.
+- **The pause is a wait, not a health check.** The roll does not know whether a node came back.
+  Pick a pause long enough for a node to rejoin and for replicated storage to catch up.
+
+A refused or failed unit fails the run and stops the roll there; the units before it stay
+applied. Fix the cause and apply again: units already applied plan clean and are skipped without
+a pause.
 
 #### Failing fast on an unreachable endpoint
 
@@ -1043,3 +1277,35 @@ curl -si https://your-site/ | head -1        # the site answers
 and for the API, a **real signed POST**, not a `GET /healthz`. A health check passing proves
 the function imported; it proves nothing at all about the write path, the table, or the IAM
 policy. The LocalStack smoke suite exists to make that distinction cheap to test.
+
+### One promotion PR for a suite
+
+Use `gitops-suite-images` when apps have independent tags. Set one `gitops-suite-overlay` and
+the controller's `gitops-base`. A stable branch `<gitops-branch-prefix>/<environment>` retains
+pending images and refreshes the same PR. The action merges the current base into that branch;
+a merge conflict stops the run instead of resetting pending work.
+
+```yaml
+- uses: MagmaMoose/tremvok@v2
+  with:
+    target: gitops-pr
+    mode: deploy
+    auth-token: ${{ steps.token.outputs.token }}
+    gitops-base: main
+    gitops-branch-prefix: chore/promote
+    gitops-suite-overlay: k8s/prd
+    gitops-suite-images: '{"ghcr.io/example/web":"v1.2.0","ghcr.io/example/api":"v3.1.4"}'
+    gitops-suite-repositories: '{"ghcr.io/example/web":"example/web","ghcr.io/example/api":"example/api"}'
+```
+
+`gitops-suite-repositories` is optional and creates links to the final selected app releases.
+Suite mode ignores stale versions per image, preserving a newer pending release even if an
+older event arrives later. It writes only the `newTag` lines; workload resources stay wherever
+the overlay references them. The runner needs mikefarah/yq v4, curl and jq. The token needs
+repository contents and pull requests write.
+
+For manual dispatch, configure `gitops-suite-allowed-actors` with GitHub logins. Both
+`github.actor` and `github.triggering_actor` must match; an empty list denies manual changes.
+A caller can resolve an identity-provider group into the authorized login list before this
+step. `gitops-suite-allow-downgrade: true` only works on an authorized manual dispatch.
+Dry runs produce a plan without a branch, commit or PR.

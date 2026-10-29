@@ -20,10 +20,10 @@
 # (`terraform/root.hcl`) is legitimately every stack there is, because that is what including
 # it from everywhere means.
 #
-# A change under `modules/` still maps to nothing, and that falls out rather than being a
-# special case: nothing beneath an excluded directory is a stack. A module has no state of its
-# own, and guessing which stacks use it from a path is how a "small module tidy-up" ends up
-# planning the entire estate.
+# A change under `modules/` widens the same way, to the stacks beneath the nearest ancestor that
+# has any (see the long note in changed_stacks for why the wide answer is the safe one). A change
+# inside a stack excluded by name does not: that stack is applied by hand and owns its subtree,
+# so the change maps to nothing.
 set -euo pipefail
 # shellcheck source=scripts/lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
@@ -54,6 +54,23 @@ is_stack() {
   [[ -f "${dir}/terragrunt.hcl" ]]
 }
 
+# A stack excluded by its own name: `edge-gateway-firewall` in the exclude list, and a
+# terragrunt.hcl in a directory of that name. It is applied by hand, and it owns everything inside
+# it, so a change there maps to nothing. A directory excluded only because it sits under an
+# excluded one (`modules/x`) is not one of these: that is shared code, and it widens below. The
+# terragrunt.hcl is looked for in the change list as well, because deleting the stack deletes it.
+is_excluded_stack() {
+  local dir="$1" segment
+  [[ "$dir" == "$ROOT_DIR" || "$dir" == "." ]] && return 1
+  for segment in $EXCLUDE_SEGMENTS; do
+    if [[ "${dir##*/}" == "$segment" ]]; then
+      [[ -f "${dir}/terragrunt.hcl" ]] || grep -qxF "${dir}/terragrunt.hcl" "$changed_file"
+      return
+    fi
+  done
+  return 1
+}
+
 all_stacks() {
   [[ -d "$ROOT_DIR" ]] || return 0
   # `if` rather than `is_stack && printf`: under `set -e` with `pipefail`, a loop whose LAST
@@ -78,12 +95,23 @@ changed_stacks() {
     [[ -n "$path" ]] || continue
     dir="$(dirname "$path")"
     found=false
+    owned=false
     # Walk up until a stack is found or the tree runs out. A deleted file's directory may no
     # longer exist, which is why this tests for terragrunt.hcl rather than for the directory.
+    #
+    # A stack excluded by name stops the walk and maps the path to nothing. Without that, a path
+    # inside one walks straight past it, finds no enclosing stack, and the branch below takes it
+    # for shared configuration and widens it to every stack beside it: an edit to a hand-applied
+    # firewall stack planned the k3s cluster next to it, and an approval would have applied that
+    # cluster from the pull request's base.
     while [[ "$dir" != "." && "$dir" != "/" ]]; do
       if is_stack "$dir"; then
         printf '%s\n' "$dir"
         found=true
+        break
+      fi
+      if is_excluded_stack "$dir"; then
+        owned=true
         break
       fi
       dir="$(dirname "$dir")"
@@ -109,7 +137,7 @@ changed_stacks() {
     # `$every_stack` is already filtered, so exclusions apply to the expanded set for free. A
     # path directly in ROOT_DIR answers at ROOT_DIR and therefore every stack, which is correct
     # rather than a case to suppress: a file every stack includes has changed every stack.
-    if [[ "$found" == false && "$path" == "$ROOT_DIR"/* ]]; then
+    if [[ "$found" == false && "$owned" == false && "$path" == "$ROOT_DIR"/* ]]; then
       base="$(dirname "$path")"
       while [[ "$base" == "$ROOT_DIR"/* || "$base" == "$ROOT_DIR" ]]; do
         matched=false

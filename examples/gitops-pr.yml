@@ -1,0 +1,60 @@
+name: GitOps PR
+
+# Deploys each stable release through the kustomize overlays Flux (or Argo CD) applies, by
+# pull request: a published release opens the PR for the first overlay, and merging it opens
+# the PR for the next. Merging a deploy PR is the deployment. Remove the image automation that
+# used to write these overlays, or the two fight over the same line.
+on:
+  # Diatreme publishes the GitHub Release after the image is in the registry.
+  release:
+    types: [published]
+  # A merged deploy PR. The paths filter keeps every other push out.
+  push:
+    branches: [main]
+    paths: ['k8s/overlays/acc/**', 'k8s/overlays/prd/**']
+  # A deploy by hand, or a re-run.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to deploy to the first overlay'
+        required: true
+
+# Nothing is checked out; the App token below does the reading and writing.
+permissions:
+  contents: read
+
+concurrency:
+  group: gitops-pr
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ${{ vars.SELFHOSTED_GITHUB_RUNNER || 'ubuntu-latest' }}
+    steps:
+      # An App token, not GITHUB_TOKEN: a pull request GITHUB_TOKEN opens starts no workflow,
+      # so its required checks never report and it cannot be merged.
+      - id: app-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ vars.DEPLOY_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: MagmaMoose/tremvok@v2  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          target: gitops-pr
+          # Explicit, because `auto` reads a pull_request as a preview and this workflow has
+          # no pull_request trigger to read.
+          mode: deploy
+          gitops-overlays: |
+            k8s/overlays/acc
+            k8s/overlays/prd
+          gitops-images: ghcr.io/${{ github.repository }}
+          # Release candidates: prereleases deploy to acc only, and the stable release of a
+          # candidate acc runs goes straight to prd.
+          # gitops-prereleases: true
+          # gitops-prereleases-until: acc
+          gitops-tag: ${{ inputs.tag }}
+          auth-token: ${{ steps.app-token.outputs.token }}
+          teams-webhook: ${{ secrets.TEAMS_WEBHOOK }}

@@ -36,6 +36,7 @@ ALL_TARGETS = [
     "cloudflare-workers",
     "azure-functions-zip",
     "azure-apim-policy",
+    "gitops-pr",
 ]
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ACTION = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))

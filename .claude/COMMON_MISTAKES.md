@@ -116,6 +116,20 @@ override this.
 `No module named 'pydantic_core._pydantic_core'` on request one. `build_api_zip.py --arch` and
 the module's `architecture` must agree; the Makefile derives both from `uname -m`.
 
+## Resetting an open pull request's branch to the base marks it MERGED
+
+GitHub treats a pull request as merged the moment its head points at a commit the base already
+contains. "Reset `deploy/acc` to main, then commit the new tag" therefore closes the open deploy
+PR as merged, with nothing in it, and the reviewer sees a merged deploy that deployed nothing.
+`gitops-open-pr.sh` makes a new branch per tag and closes the old pull request as superseded; a
+leftover branch is only deleted when no open pull request sits on it.
+
+## A deploy PR opened with GITHUB_TOKEN can never merge
+
+Events a workflow's own GITHUB_TOKEN causes start no workflow, so the deploy PR's required
+checks never run, never report, and block it for ever. `gitops-pr` needs an App token in
+`auth-token`. The same is why the release that starts it must be published by an App.
+
 ## A required check that never reports blocks the pull request forever
 
 Which is why `deploy-terragrunt.sh` publishes the check run even when it discovers **zero**
@@ -389,3 +403,46 @@ a `String.raw` template now, served byte for byte whatever the bundler does, and
 `tests/test_workers_bindings.py` runs the dry-run bundle's `/webmcp.js` in an empty context so
 that going back to `toString()` fails CI. The general rule: anything the router sends to a
 browser is data, never a function's source.
+
+## An approved cluster resize powered off every node in the same second
+
+A pull request raised the CPU and memory of three k3s worker VMs. The plan was three in-place
+updates; it was reviewed, approved, and the approval applied it. The VCD provider cannot hot-add
+CPU on those VMs, so it hard powers each one off, changes it and powers it back on, and tofu
+updates independent resources in parallel. All three workers went down together, and every
+workload on the cluster with them, the identity provider and the dashboard used to look included.
+Nothing failed. The apply was green.
+
+A plan says what changes, not what the change does to whatever runs on it. `terragrunt-rolling`
+applies such a stack one unit at a time with a pause between. The trap inside the fix:
+`-target=module.node["cp"]` still plans every instance of a `for_each` resource that node depends
+on, so a control plane's apply resized every worker's disk. Targeting the unit under every listed
+address, including instances that do not exist, is what keeps a unit's plan to itself, and the
+guard that refuses a plan touching another unit catches what that misses.
+`tests/bats/terragrunt_rolling.bats` pins both.
+
+## An edit to a hand-applied stack planned the cluster next to it
+
+`terragrunt-exclude` keeps a stack out of the pipeline, a firewall that is rewritten wholesale
+and applied in a window, say. But an edit inside it walked up past it (it is excluded, so it is
+not a stack), found no enclosing stack, and fell into the branch that widens shared
+configuration to every stack beneath the nearest ancestor: the k3s cluster beside it. The plan
+showed the cluster's VMs being resized back to the base branch's values, because a resize had
+been applied from another pull request that had not merged yet, and approving the firewall change
+would have applied that resize. The check was green and nothing looked wrong.
+
+`is_excluded_stack` in `terragrunt-discover.sh` stops the walk at a directory whose own name is
+excluded and that holds a `terragrunt.hcl`, or whose `terragrunt.hcl` is in the change list
+because it was deleted, and maps the path to nothing. The own-name test is what keeps
+`modules/x/` shared code that still widens. `tests/bats/terragrunt_discover.bats` pins both.
+
+## `sort -V` ranks 1.2.3 below 1.2.3-rc.1, so a candidate's own release read as a downgrade
+
+gitops-pr refuses to move an overlay backwards, and it decided "backwards" with `sort -V`. That
+puts `v1.4.0` BEFORE `v1.4.0-rc.2`, the reverse of SemVer. Harmless while every overlay only saw
+one channel; fatal for release candidates: acc runs `v1.4.0-rc.2`, the candidate is signed off
+and released as `v1.4.0`, and the deploy PR is skipped as "already runs a newer tag", with a
+notice and a green run. `tremvok::version_gt` in `scripts/lib/common.sh` applies SemVer
+precedence when both tags are versions and falls back to `sort -V` otherwise; never swap it
+back. `tests/bats/version_gt.bats` pins the cases, and `gitops-prereleases-until` (prereleases
+stop at acc, their stable release goes straight to prd) depends on it.

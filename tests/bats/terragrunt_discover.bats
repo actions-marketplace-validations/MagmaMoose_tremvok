@@ -159,3 +159,57 @@ setup() {
   # would be published as "No Terraform stacks affected" on a green check.
   [[ "$output" == *"terraform/estate/prod"* ]]
 }
+
+# ── a stack excluded by name owns its subtree ────────────────────────────────────────────
+# What this prevents was found on a live estate: an edit to a hand-applied firewall stack walked
+# past it, found no enclosing stack, was taken for shared configuration, and widened to the k3s
+# cluster beside it. The plan showed the cluster's VMs being resized back to what the base branch
+# said, and an approval would have applied that.
+
+firewall_beside_stacks() {
+  mkdir -p terraform/aws/prod/eu-west-1/firewall
+  touch terraform/aws/prod/eu-west-1/firewall/terragrunt.hcl
+}
+
+@test "a change inside a stack excluded by name maps to nothing, not to the stacks beside it" {
+  firewall_beside_stacks
+  printf 'terraform/aws/prod/eu-west-1/firewall/rules.tf\n' >changed.txt
+  EXCLUDE_SEGMENTS='modules firewall' run bash "${SCRIPTS}/terragrunt-discover.sh" changed changed.txt
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "a file deep inside an excluded stack is owned by it too" {
+  firewall_beside_stacks
+  mkdir -p terraform/aws/prod/eu-west-1/firewall/rules/inbound
+  printf 'terraform/aws/prod/eu-west-1/firewall/rules/inbound/web.json\n' >changed.txt
+  EXCLUDE_SEGMENTS='modules firewall' run bash "${SCRIPTS}/terragrunt-discover.sh" changed changed.txt
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "deleting an excluded stack maps to nothing, though its terragrunt.hcl is no longer there to find" {
+  printf '%s\n' 'terraform/aws/prod/eu-west-1/firewall/terragrunt.hcl' \
+    'terraform/aws/prod/eu-west-1/firewall/main.tf' >changed.txt
+  EXCLUDE_SEGMENTS='modules firewall' run bash "${SCRIPTS}/terragrunt-discover.sh" changed changed.txt
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "an excluded stack owns only itself: a change to a stack beside it still plans that stack" {
+  firewall_beside_stacks
+  printf '%s\n' 'terraform/aws/prod/eu-west-1/firewall/rules.tf' \
+    'terraform/aws/prod/eu-west-1/api/main.tf' >changed.txt
+  EXCLUDE_SEGMENTS='modules firewall' run bash "${SCRIPTS}/terragrunt-discover.sh" changed changed.txt
+  [ "$status" -eq 0 ]
+  [ "$output" = "terraform/aws/prod/eu-west-1/api" ]
+}
+
+@test "a directory excluded only because it sits under an excluded one is shared code, and still widens" {
+  # modules/tremvok-api holds a terragrunt.hcl in this fixture, but `tremvok-api` is not in the
+  # exclude list: `modules` is. That is a module, and a module edit plans what it may reach.
+  printf 'terraform/aws/modules/tremvok-api/main.tf\n' >changed.txt
+  EXCLUDE_SEGMENTS='modules firewall' run bash "${SCRIPTS}/terragrunt-discover.sh" changed changed.txt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"terraform/aws/prod/eu-west-1/api"* ]]
+}

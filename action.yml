@@ -1,5 +1,5 @@
 name: 'Tremvok'
-description: 'Deploy anything: GitHub Pages, Cloudflare Workers, Azure Functions, AWS S3/CloudFront & Lambda, Terragrunt, and Ansible.'
+description: 'Deploy anything: GitHub Pages, Cloudflare Workers, Azure, AWS S3/CloudFront & Lambda, Terragrunt, Ansible, GitOps PRs.'
 author: 'MagmaMoose'
 
 branding:
@@ -41,6 +41,8 @@ inputs:
         azure-functions-zip  Publish a zip to an Azure Function App, then wait for it to answer.
         azure-apim-policy    Publish policy documents to an existing Azure API Management API,
                              putting the previous ones back if any is refused.
+        gitops-pr            Deploy a released image through kustomize overlays by pull
+                             request: one per overlay, the next opened when one merges.
     required: true
 
   mode:
@@ -330,10 +332,11 @@ inputs:
   terragrunt-exclude:
     description: |
       terragrunt: space-separated path segments that never hold a stack. `modules _modules`
-      by default: a module has no state of its own, and guessing which stacks use it from a
-      path is how a small module tidy-up ends up planning the whole estate. Add a stack that
-      must only ever be applied by hand, one that rewrites a firewall wholesale, say, and
-      the pipeline will not touch it.
+      by default: a module has no state of its own, so a change to one plans the stacks
+      beneath the nearest directory above it that has any. Add a stack that must only ever be
+      applied by hand, one that rewrites a firewall wholesale, say, by its directory name, and
+      the pipeline will not touch it: a change inside it plans nothing, not even the stacks
+      beside it.
     required: false
     default: 'modules _modules'
 
@@ -419,6 +422,36 @@ inputs:
       annotation it would appear in is as public as the repository.
     required: false
     default: ''
+
+  terragrunt-rolling:
+    description: |
+      terragrunt: stacks whose apply takes one unit at a time, `<glob> <address> [<address>
+      ...]` per line. The first matching line wins; blank lines and `#` comments are ignored.
+
+        */k3s-cluster  module.node
+
+      Each address names a `for_each` or `count` block, and each of its instances is a unit:
+      `module.node["worker-0"]` is one and `module.node["worker-1"]` another. Instances of two
+      addresses that share a key are one unit, so `module.node aws_ebs_volume.data` rolls a
+      node and its disk together.
+
+      When the plan to be applied changes two or more units, the apply plans and applies each
+      on its own with `-target`, in plan order, waits `terragrunt-rolling-pause` seconds before
+      the next, and ends with a full plan that applies whatever no unit holds and proves every
+      unit landed. A plan that changes one unit or none applies the saved plan as before.
+
+      For a change that restarts what it touches. Resizing a cluster's VMs restarts each one,
+      and one apply of the whole plan restarts every node at the same moment, which takes the
+      cluster down. A unit whose targeted plan also changes another unit (tofu plans every
+      instance of a resource that a target depends on) is refused before any of it is applied,
+      so the run fails rather than restarting several units at once.
+    required: false
+    default: ''
+
+  terragrunt-rolling-pause:
+    description: 'terragrunt: seconds to wait after a `terragrunt-rolling` unit is applied before the next one is planned, so the last one is back before another goes down.'
+    required: false
+    default: '300'
 
   terragrunt-check-name:
     description: 'terragrunt: name of the check run published against the head commit. Make it a required check to enforce apply-before-merge.'
@@ -938,6 +971,130 @@ inputs:
     required: false
     default: 'rawxml'
 
+  # ── target: gitops-pr ─────────────────────────────────────────────────────
+  gitops-suite-images:
+    description: 'gitops-pr: opt-in suite promotion, JSON image repository to tag map. Each app keeps its own version; one stable PR per environment accumulates pending changes.'
+    required: false
+    default: ''
+
+  gitops-suite-overlay:
+    description: 'gitops-pr: exact overlay directory for suite promotion. Requires gitops-suite-images and gitops-base.'
+    required: false
+    default: ''
+
+  gitops-suite-repositories:
+    description: 'gitops-pr: optional JSON image repository to owner/repository map for current selected release links in the suite PR.'
+    required: false
+    default: ''
+
+  gitops-suite-allowed-actors:
+    description: 'gitops-pr: comma or whitespace separated GitHub logins allowed to dispatch manual suite changes. Both original and rerun actors must match; empty denies manual changes.'
+    required: false
+    default: ''
+
+  gitops-suite-allow-downgrade:
+    description: 'gitops-pr: permit a suite downgrade only on an authorized manual dispatch.'
+    required: false
+    default: 'false'
+
+  gitops-overlays:
+    description: |
+      gitops-pr: the kustomize overlay directories a release is deployed through, in
+      promotion order, separated by whitespace (one per line reads best). Required for this
+      target.
+
+        k8s/overlays/acc
+        k8s/overlays/prd
+
+      A release opens a deploy PR for the first; merging it opens the one for the second, and
+      so on. An overlay is named by its last path segment (`acc`), which is part of the deploy
+      PR branch (`deploy/acc/v1.2.3`), so the names must be unique. Each overlay's
+      kustomization lists the images in `images:` with a `newTag`, and the image automation
+      that used to write it must be gone, or the two fight over the same line.
+    required: false
+    default: ''
+
+  gitops-images:
+    description: |
+      gitops-pr: the image repositories a deploy moves, as the overlays name them (`name`, or
+      `newName` where an entry has one), without a tag, separated by whitespace. Required for
+      this target. Every one moves to the release's tag; an overlay that lists none of them is
+      an error, one that lists some of them gets a warning for the rest.
+    required: false
+    default: ''
+
+  gitops-tag:
+    description: |
+      gitops-pr: deploy this tag to the first overlay instead of the release event's. For a
+      deploy by hand from `workflow_dispatch`, or to re-open one. Empty (the default) takes the
+      tag from the published release, or promotes what a merged deploy PR moved.
+    required: false
+    default: ''
+
+  gitops-base:
+    description: |
+      gitops-pr: the branch the overlays are read from and deploy PRs target: the one the
+      cluster's controller watches. Empty (the default) is the pushed branch on a push, and the
+      repository's default branch otherwise. Set it when those differ, e.g. `master` in a
+      repository whose default branch is `dev`.
+    required: false
+    default: ''
+
+  gitops-branch-prefix:
+    description: |
+      gitops-pr: prefix for deploy PR branches, `<prefix>/<overlay>/<tag>`. A merged pull
+      request is recognised as a deploy PR by it, so change it only with the open ones merged
+      or closed.
+    required: false
+    default: 'deploy'
+
+  gitops-prereleases:
+    description: 'gitops-pr: deploy prerelease GitHub Releases too. Off by default: only a stable release opens a deploy PR.'
+    required: false
+    default: 'false'
+
+  gitops-prereleases-until:
+    description: |
+      gitops-pr: the overlay a prerelease stops at, by name (`acc`) or path, for release
+      candidates. Empty (the default) sends a prerelease through every overlay like a stable
+      release, when `gitops-prereleases` is on.
+
+      Set, a prerelease's deploy PRs stop at this overlay. A stable release whose own
+      prerelease this overlay already runs (v1.4.0 while acc runs v1.4.0-rc.2) starts at the
+      overlay after it: the signed-off candidate reaches production under its stable tag,
+      without a second deploy to acceptance. A stable release with no candidate running there
+      starts at the first overlay, as usual, so production only ever gets what acceptance ran.
+      It cannot be the last overlay.
+    required: false
+    default: ''
+
+  gitops-preview-labels:
+    description: |
+      gitops-pr: labels that each claim one preview environment, one per line, for a
+      controller that deploys the open pull request carrying a label: Flux Operator's
+      `GitHubPullRequest` input provider with `filter.labels` and `filter.limit: 1`. Empty
+      (the default) leaves labels alone.
+
+        deploy/preview-1
+        deploy/preview-2
+
+      On a pull request run, the first pull request to take a label holds it, and one that
+      takes it later loses the label again, with a comment naming the holder. Taking the label
+      off, or closing the pull request, releases it; closing also takes the label off, so a
+      reopened pull request does not take the environment back. Nothing is deployed: the
+      controller does that. Run it on `pull_request` `labeled`, `unlabeled` and `closed`,
+      with a concurrency group per label.
+    required: false
+    default: ''
+
+  gitops-preview-urls:
+    description: |
+      gitops-pr: each preview environment's URL, as a JSON object from a label in
+      `gitops-preview-labels` to its URL, for the comment on the pull request that holds it.
+      Optional.
+    required: false
+    default: ''
+
   # ── Verification ─────────────────────────────────────────────────────────
   verify-url:
     description: 'Post-deploy: the URL that must answer. Empty skips verification. Catches the deploy that uploaded but did not bind, the one failure that otherwise looks green.'
@@ -1017,7 +1174,7 @@ inputs:
     default: 'tremvok'
 
   auth-token:
-    description: 'Token used for the pull-request comment and the check run. Needs `pull-requests: write` and, for the terragrunt target, `checks: write`.'
+    description: 'Token used for the pull-request comment and the check run. Needs `pull-requests: write` and, for the terragrunt target, `checks: write`. For gitops-pr it also opens the deploy PRs, so it needs `contents: write`, and it must be an App token: a pull request opened with GITHUB_TOKEN starts no workflow, so its required checks never report. Preview claims (`gitops-preview-labels`) need only `pull-requests: write`, and GITHUB_TOKEN will do.'
     required: false
     default: ${{ github.token }}
 
@@ -1043,8 +1200,8 @@ outputs:
     description: 'The resolved environment name.'
     value: ${{ steps.resolve.outputs.environment }}
   url:
-    description: 'URL of what was deployed, when the target produces one.'
-    value: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
+    description: 'URL of what was deployed, when the target produces one. For gitops-pr, the deploy PR this run opened or refreshed.'
+    value: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url || steps.deploy-gitops.outputs.url || steps.deploy-suite.outputs.url }}
   deployed:
     description: 'true when something was actually deployed (false for a skip).'
     value: ${{ steps.outcome.outputs.deployed }}
@@ -1067,8 +1224,8 @@ outputs:
     description: 'github-pages: the toolchain actually used, uv or pip.'
     value: ${{ steps.pages-detect.outputs.toolchain }}
   version-id:
-    description: 'lambda-zip, cloudflare-workers, azure-functions-zip, azure-apim-policy: the published version. A Lambda version number, a Worker Version ID, the package sha256, or the sha256 of the policy set — Azure exposes no per-deploy content hash of its own.'
-    value: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
+    description: 'lambda-zip, cloudflare-workers, azure-functions-zip, azure-apim-policy, gitops-pr: the published version. A Lambda version number, a Worker Version ID, the package sha256, the sha256 of the policy set — Azure exposes no per-deploy content hash of its own — or the image tag a deploy PR moves to.'
+    value: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id || steps.deploy-gitops.outputs.version-id }}
   stacks:
     description: 'terragrunt: how many stacks this run discovered.'
     value: ${{ steps.deploy-terragrunt.outputs.stacks }}
@@ -1084,6 +1241,12 @@ outputs:
   idempotent:
     description: 'ansible: true when the second check-mode run found nothing left to change.'
     value: ${{ steps.deploy-ansible.outputs.idempotent }}
+  gitops-result:
+    description: 'gitops-pr: what the run did: `created`, `refreshed`, `unchanged` (the overlay already runs the tag), `skipped` (it runs a newer one, or a newer deploy PR is open) or `planned` (dry run). Empty when there was nothing to deploy.'
+    value: ${{ steps.deploy-gitops.outputs.result }}
+  gitops-preview-result:
+    description: 'gitops-pr: with gitops-preview-labels, what a pull request run did with its claim: `claimed` (it holds the label), `refused` (another pull request holds it, so the label came off), `released` (it held the label and let it go) or `ignored` (the event changed no claim of its own). Empty on any other run.'
+    value: ${{ steps.preview-claim.outputs.result }}
 
 runs:
   using: 'composite'
@@ -1101,8 +1264,9 @@ runs:
         TG_PULL_REQUEST: ${{ inputs.terragrunt-pull-request }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/validate-inputs.sh"
 
+    # Not for gitops-pr, which reads and writes the repository through the API alone.
     - name: Checkout
-      if: inputs.checkout == 'true'
+      if: inputs.checkout == 'true' && inputs.target != 'gitops-pr'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # Terragrunt maps changed files to stacks, and a push event's "before" commit is
@@ -1164,7 +1328,7 @@ runs:
 
     - name: Set up uv
       if: steps.pages-detect.outputs.toolchain == 'uv'
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         python-version: ${{ inputs.pages-python-version }}
 
@@ -1217,7 +1381,7 @@ runs:
     # step is skipped there and costs nothing.
     - name: Set up Node for markdownlint
       if: (inputs.target == 'github-pages' || inputs.target == 'cloudflare-docs') && inputs.pages-markdownlint == 'true' && steps.pages-detect.outputs.has-node == 'false'
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: '22'
 
@@ -1414,7 +1578,7 @@ runs:
     # `cloudflare-docs-host` reaches it over a service binding. See workers/docs-router/.
     - name: Set up Node for Wrangler
       if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-docs'
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.cloudflare-node-version }}
 
@@ -1632,6 +1796,8 @@ runs:
         APPLY_ON_MERGE: ${{ inputs.terragrunt-apply-on-merge }}
         APPLY_OPERATORS: ${{ inputs.terragrunt-apply-operators }}
         STACK_ENV: ${{ inputs.terragrunt-stack-env }}
+        ROLLING: ${{ inputs.terragrunt-rolling }}
+        ROLLING_PAUSE: ${{ inputs.terragrunt-rolling-pause }}
         CHECK_NAME: ${{ inputs.terragrunt-check-name }}
         TG_REFRESH: ${{ inputs.terragrunt-refresh }}
         TG_PLAN_LOCK: ${{ inputs.terragrunt-plan-lock }}
@@ -1701,7 +1867,7 @@ runs:
     # refuses to run, and a self-hosted runner may ship no Node at all.
     - name: Set up Node for Wrangler
       if: steps.preflight.outputs.skip != 'true' && inputs.target == 'cloudflare-workers'
-      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.cloudflare-node-version }}
 
@@ -1761,6 +1927,70 @@ runs:
         DRY_RUN: ${{ inputs.dry-run }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/deploy-azure-apim-policy.sh"
 
+    - name: Deploy, GitOps pull request
+      id: deploy-gitops
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'gitops-pr' && inputs.gitops-suite-images == ''
+      shell: bash
+      env:
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        SHA: ${{ github.sha }}
+        REF_NAME: ${{ github.ref_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        AUTH_TOKEN: ${{ inputs.auth-token }}
+        OVERLAYS: ${{ inputs.gitops-overlays }}
+        IMAGES: ${{ inputs.gitops-images }}
+        TAG: ${{ inputs.gitops-tag }}
+        BASE: ${{ inputs.gitops-base }}
+        BRANCH_PREFIX: ${{ inputs.gitops-branch-prefix }}
+        PRERELEASES: ${{ inputs.gitops-prereleases }}
+        PRERELEASES_UNTIL: ${{ inputs.gitops-prereleases-until }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/deploy-gitops-pr.sh"
+
+    - name: Deploy, suite promotion pull request
+      id: deploy-suite
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'gitops-pr' && inputs.gitops-suite-images != ''
+      shell: bash
+      env:
+        MODE: ${{ steps.resolve.outputs.mode }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        EVENT_NAME: ${{ github.event_name }}
+        GITHUB_ACTOR: ${{ github.actor }}
+        GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        AUTH_TOKEN: ${{ inputs.auth-token }}
+        OVERLAY: ${{ inputs.gitops-suite-overlay }}
+        IMAGES: ${{ inputs.gitops-suite-images }}
+        RELEASE_REPOSITORIES: ${{ inputs.gitops-suite-repositories }}
+        BASE: ${{ inputs.gitops-base }}
+        BRANCH_PREFIX: ${{ inputs.gitops-branch-prefix }}
+        ALLOWED_ACTORS: ${{ inputs.gitops-suite-allowed-actors }}
+        ALLOW_DOWNGRADE: ${{ inputs.gitops-suite-allow-downgrade }}
+      run: |
+        set -euo pipefail
+        if [ "${MODE}" != "deploy" ]; then
+          echo "::notice::Suite promotions create reviewable PRs in deploy mode."
+          echo "deployed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        bash "${GITHUB_ACTION_PATH}/scripts/gitops-suite-pr.sh"
+        echo "deployed=true" >> "$GITHUB_OUTPUT"
+
+    # A preview controller deploys the open pull request carrying a label. This keeps that to
+    # one pull request per label and tells the others; it deploys nothing itself.
+    - name: Settle the preview label claims
+      id: preview-claim
+      if: steps.preflight.outputs.skip != 'true' && inputs.target == 'gitops-pr' && inputs.gitops-preview-labels != '' && steps.resolve.outputs.mode == 'preview'
+      shell: bash
+      env:
+        EVENT_PATH: ${{ github.event_path }}
+        AUTH_TOKEN: ${{ inputs.auth-token }}
+        LABELS: ${{ inputs.gitops-preview-labels }}
+        URLS: ${{ inputs.gitops-preview-urls }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/gitops-preview-claim.sh"
+
     # ── Verify, then tell the humans ─────────────────────────────────────────
     - name: Verify it actually went live
       id: verify
@@ -1789,6 +2019,7 @@ runs:
         CF_DEPLOYED: ${{ steps.deploy-cloudflare.outputs.deployed }}
         AZ_DEPLOYED: ${{ steps.deploy-azure-functions.outputs.deployed }}
         APIM_DEPLOYED: ${{ steps.deploy-azure-apim.outputs.deployed }}
+        GITOPS_DEPLOYED: ${{ steps.deploy-gitops.outputs.deployed || steps.deploy-suite.outputs.deployed }}
         ANSIBLE_DEPLOYED: ${{ steps.deploy-ansible.outputs.deployed }}
         JOB_STATUS: ${{ job.status }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/collect-outcome.sh"
@@ -1796,17 +2027,17 @@ runs:
     - name: Notify, sticky pull-request comment
       # `always()` on every notification step. A deploy that failed is exactly when the humans
       # most need to be told, and a step without it is skipped the moment anything upstream
-      # goes red. The terragrunt target keeps its own rolling comment, so it is excluded here
-      # rather than commented on twice.
-      if: always() && steps.preflight.outputs.skip != 'true' && github.event.pull_request.number && inputs.target != 'terragrunt' && (inputs.pr-comment == 'true' || (inputs.pr-comment == 'auto' && steps.resolve.outputs.mode == 'preview'))
+      # goes red. The terragrunt target keeps its own rolling comment, and so do gitops-pr's
+      # preview claims, so both are excluded here rather than commented on twice.
+      if: always() && steps.preflight.outputs.skip != 'true' && github.event.pull_request.number && inputs.target != 'terragrunt' && inputs.gitops-preview-labels == '' && (inputs.pr-comment == 'true' || (inputs.pr-comment == 'auto' && steps.resolve.outputs.mode == 'preview'))
       shell: bash
       env:
         AUTH_TOKEN: ${{ inputs.auth-token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         COMMENT_KEY: ${{ inputs.target }}-${{ steps.resolve.outputs.environment }}
         STATUS: ${{ steps.outcome.outputs.status }}
-        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
-        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
+        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url || steps.deploy-gitops.outputs.url || steps.deploy-suite.outputs.url }}
+        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id || steps.deploy-gitops.outputs.version-id }}
         VERIFIED: ${{ steps.verify.outputs.verified }}
         MODE: ${{ steps.resolve.outputs.mode }}
         TARGET: ${{ inputs.target }}
@@ -1825,8 +2056,8 @@ runs:
         TARGET: ${{ inputs.target }}
         MODE: ${{ steps.resolve.outputs.mode }}
         ENVIRONMENT: ${{ steps.resolve.outputs.environment }}
-        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
-        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
+        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url || steps.deploy-gitops.outputs.url || steps.deploy-suite.outputs.url }}
+        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id || steps.deploy-gitops.outputs.version-id }}
         VERIFIED: ${{ steps.verify.outputs.verified }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/notify-webhook.sh"
@@ -1842,8 +2073,8 @@ runs:
         TARGET: ${{ inputs.target }}
         MODE: ${{ steps.resolve.outputs.mode }}
         ENVIRONMENT: ${{ steps.resolve.outputs.environment }}
-        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url }}
-        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id }}
+        URL: ${{ steps.deploy-s3.outputs.url || steps.deploy-cloudflare.outputs.url || steps.deploy-azure-functions.outputs.url || steps.deploy-azure-apim.outputs.url || steps.deploy-gitops.outputs.url || steps.deploy-suite.outputs.url }}
+        VERSION: ${{ steps.deploy-lambda.outputs.version-id || steps.deploy-cloudflare.outputs.version-id || steps.deploy-azure-functions.outputs.version-id || steps.deploy-azure-apim.outputs.version-id || steps.deploy-gitops.outputs.version-id }}
         VERIFIED: ${{ steps.verify.outputs.verified }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: bash "${GITHUB_ACTION_PATH}/scripts/record-deployment.sh"

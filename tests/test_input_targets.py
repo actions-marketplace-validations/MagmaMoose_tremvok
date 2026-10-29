@@ -81,6 +81,7 @@ SHARED_INPUTS_ONLY = {"github-pages"}
         "cloudflare-workers",
         "azure-functions-zip",
         "azure-apim-policy",
+        "gitops-pr",
     ],
 )
 def test_every_target_owns_at_least_one_input(target):
@@ -122,6 +123,8 @@ def test_target_specific_inputs_are_named_for_their_target():
         "azure-functions-zip": ("functions-", "azure-", "artifact-"),
         # `apim-` is the target's own, as `functions-` is the other Azure target's.
         "azure-apim-policy": ("apim-", "azure-", "artifact-"),
+        # `gitops-` is shorter than the target value, as `s3-` and `lambda-` are.
+        "gitops-pr": ("gitops-",),
     }
     data = json.loads(MAP.read_text())["inputs"]
     wrong = []
